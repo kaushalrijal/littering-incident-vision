@@ -1,0 +1,6 @@
+# Ground truth for evaluation. Copy this file to data/ground_truth.csv and
+# fill in one row per test video placed in data/test_videos/.
+# expected_incidents: 1 = an event should be detected, 0 = no event should fire.
+video,expected_incidents
+test_01.mp4,1
+test_02.mp4,0

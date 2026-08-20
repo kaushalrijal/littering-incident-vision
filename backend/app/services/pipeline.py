@@ -27,9 +27,9 @@ logger = logging.getLogger("pipeline")
 PERSON_COLOR = (0, 200, 0)   # BGR green
 WASTE_COLOR = (0, 0, 255)    # BGR red
 
-# Codecs tried in order when writing .mp4 clips / previews. "mp4v" is the
-# most widely supported OpenCV fallback on Windows; "avc1" is H.264.
-CODECS = ["mp4v", "avc1"]
+# Codecs tried in order when writing .mp4 clips / previews. "avc1" is H.264
+# supported natively by HTML5 web browsers (Chrome, Firefox, Edge, VS Code).
+CODECS = ["avc1", "H264", "x264", "mp4v"]
 
 
 class Pipeline:

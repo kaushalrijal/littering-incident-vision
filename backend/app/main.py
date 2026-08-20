@@ -23,8 +23,12 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
+from backend.app.utils import ensure_openh264
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ensure_openh264()
     db.init_db()
     ws_manager.set_loop(asyncio.get_running_loop())
     worker.start()

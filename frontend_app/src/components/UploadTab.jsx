@@ -103,7 +103,6 @@ export default function UploadTab({ onUploadSuccess }) {
       </div>
 
       <div className="lg-card overflow-hidden">
-        <div className="h-[3px] bg-[#3E7C59]" />
         <div
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}

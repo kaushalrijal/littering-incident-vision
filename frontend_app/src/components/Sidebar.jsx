@@ -27,15 +27,12 @@ export default function Sidebar({
           key={item.id}
           type="button"
           onClick={() => setActiveTab(item.id)}
-          className={`relative w-full flex items-center justify-between pl-3 pr-2.5 py-2 rounded-lg text-[13px] font-medium transition-colors duration-150 ${
+          className={`w-full flex items-center justify-between pl-3 pr-2.5 py-2 rounded-lg text-[13px] font-medium transition-colors duration-150 ${
             isActive
               ? 'bg-[#EAF2EC] text-[#1F4D3A]'
               : 'text-[#647067] hover:text-[#26312B] hover:bg-[#EEF1EC]'
           }`}
         >
-          {isActive && (
-            <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-[#3E7C59]" />
-          )}
           <span>{item.label}</span>
           {item.badge != null && (
             <span className="min-w-[18px] h-[18px] px-1 text-[11px] font-semibold rounded-md bg-[#1F4D3A] text-white flex items-center justify-center">

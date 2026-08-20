@@ -1,101 +1,105 @@
 import React from 'react';
-import { 
-  Upload, 
-  Film, 
-  AlertTriangle, 
-  Camera, 
-  ShieldCheck, 
-  Activity,
-  Radio
-} from 'lucide-react';
+import { Shield, Leaf } from 'lucide-react';
 
-export default function Sidebar({ activeTab, setActiveTab, wsConnected, activeProcessingCount }) {
-  const navItems = [
-    { id: 'upload', label: 'Upload Video', icon: Upload },
-    { 
-      id: 'videos', 
-      label: 'Videos & Output', 
-      icon: Film,
-      badge: activeProcessingCount > 0 ? activeProcessingCount : null
+function BrandMark() {
+  return (
+    <div className="relative w-8 h-8 rounded-lg bg-[#1F4D3A] flex items-center justify-center text-white shrink-0">
+      <Shield className="w-[18px] h-[18px]" strokeWidth={1.75} />
+      <Leaf className="absolute bottom-1 right-1 w-2.5 h-2.5 text-[#EAF2EC]" strokeWidth={2.5} />
+    </div>
+  );
+}
+
+export default function Sidebar({
+  activeTab,
+  setActiveTab,
+  wsConnected,
+  activeProcessingCount,
+  open = false,
+}) {
+  const overviewItems = [
+    {
+      id: 'videos',
+      label: 'Videos & Output',
+      badge: activeProcessingCount > 0 ? activeProcessingCount : null,
     },
-    { id: 'incidents', label: 'Incident Review', icon: AlertTriangle },
-    { id: 'webcam', label: 'Real-Time Camera', icon: Camera },
+    { id: 'incidents', label: 'Incident Review' },
+    { id: 'webcam', label: 'Real-Time Camera' },
   ];
 
+  const systemItems = [{ id: 'upload', label: 'Upload Video' }];
+
+  const renderNav = (items) =>
+    items.map((item) => {
+      const isActive = activeTab === item.id;
+      return (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => setActiveTab(item.id)}
+          className={`relative w-full flex items-center justify-between pl-3 pr-2.5 py-2 rounded-lg text-[13px] font-medium transition-colors duration-150 ${
+            isActive
+              ? 'bg-[#EAF2EC] text-[#1F4D3A]'
+              : 'text-[#647067] hover:text-[#26312B] hover:bg-[#EEF1EC]'
+          }`}
+        >
+          {isActive && (
+            <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-[#3E7C59]" />
+          )}
+          <span>{item.label}</span>
+          {item.badge != null && (
+            <span className="min-w-[18px] h-[18px] px-1 text-[11px] font-semibold rounded-md bg-[#1F4D3A] text-white flex items-center justify-center">
+              {item.badge}
+            </span>
+          )}
+        </button>
+      );
+    });
+
   return (
-    <aside className="w-64 bg-slate-950 border-r border-slate-800/80 flex flex-col justify-between select-none">
-      {/* Brand Header */}
+    <aside
+      className={`fixed lg:static inset-y-0 left-0 z-40 w-[232px] bg-white border-r border-[#E2E7E2] flex flex-col justify-between select-none transition-transform duration-200 ${
+        open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+      }`}
+    >
       <div>
-        <div className="h-16 flex items-center gap-3 px-5 border-b border-slate-800/80 bg-slate-950/50">
-          <div className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
-            <ShieldCheck className="w-5 h-5" />
-          </div>
-          <div>
-            <h1 className="font-semibold text-sm text-slate-100 tracking-tight">LitterGuard AI</h1>
-            <p className="text-[11px] text-slate-400 font-mono">v1.0 • YOLOv8 + ByteTrack</p>
+        <div className="h-[68px] flex items-center gap-2.5 px-4 border-b border-[#E2E7E2]">
+          <BrandMark />
+          <div className="min-w-0">
+            <h1 className="font-semibold text-[14px] text-[#26312B] leading-tight truncate">
+              LitterGuard AI
+            </h1>
+            <p className="text-[11px] text-[#8A948D] leading-tight mt-0.5 truncate">
+              Real-Time Detection
+            </p>
           </div>
         </div>
 
-        {/* Navigation */}
-        <nav className="p-3 space-y-1">
-          <div className="px-3 py-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-            Workspace
+        <nav className="px-3 py-4 space-y-5">
+          <div>
+            <p className="px-3 mb-1.5 text-[10px] font-semibold tracking-wide text-[#8A948D] uppercase">
+              Overview
+            </p>
+            <div className="space-y-0.5">{renderNav(overviewItems)}</div>
           </div>
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-md text-xs font-medium transition-all ${
-                  isActive
-                    ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <Icon className={`w-4 h-4 ${isActive ? 'text-cyan-400' : 'text-slate-400'}`} />
-                  <span>{item.label}</span>
-                </div>
-                {item.badge && (
-                  <span className="px-1.5 py-0.5 text-[10px] font-mono font-medium rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 animate-pulse">
-                    {item.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+
+          <div>
+            <p className="px-3 mb-1.5 text-[10px] font-semibold tracking-wide text-[#8A948D] uppercase">
+              System
+            </p>
+            <div className="space-y-0.5">{renderNav(systemItems)}</div>
+          </div>
         </nav>
       </div>
 
-      {/* Connection & System Status */}
-      <div className="p-4 border-t border-slate-800/80 bg-slate-950/40 space-y-3">
-        <div className="flex items-center justify-between text-[11px]">
-          <span className="text-slate-400 font-medium flex items-center gap-1.5">
-            <Radio className="w-3.5 h-3.5 text-slate-400" />
-            Live WebSockets
-          </span>
-          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-medium ${
-            wsConnected 
-              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
-              : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-          }`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'}`} />
-            {wsConnected ? 'Connected' : 'Connecting'}
-          </span>
-        </div>
-
-        <div className="p-2.5 rounded-md bg-slate-900/80 border border-slate-800/60 text-[11px] text-slate-400 space-y-1">
-          <div className="flex items-center justify-between text-slate-300 font-medium">
-            <span className="flex items-center gap-1">
-              <Activity className="w-3 h-3 text-cyan-400" /> Engine
-            </span>
-            <span className="font-mono text-cyan-400">N ^ R ^ S ^ M</span>
-          </div>
-          <p className="text-[10px] leading-relaxed text-slate-400">
-            ByteTrack Stitching • Point-to-Box Proximity
-          </p>
+      <div className="p-4 border-t border-[#E2E7E2]">
+        <div className="flex items-center gap-2 text-[12px] text-[#647067]">
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${
+              wsConnected ? 'bg-[#3E7C59]' : 'bg-[#C58B2A] lg-pulse'
+            }`}
+          />
+          <span>{wsConnected ? 'Connected' : 'Connecting…'}</span>
         </div>
       </div>
     </aside>

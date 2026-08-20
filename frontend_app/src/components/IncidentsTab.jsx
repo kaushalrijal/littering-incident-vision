@@ -1,15 +1,88 @@
 import React, { useState } from 'react';
-import { 
-  AlertTriangle, 
-  CheckCircle2, 
-  XCircle, 
-  Clock, 
-  ExternalLink,
-  Play,
-  Filter
-} from 'lucide-react';
+import { AlertTriangle, Camera } from 'lucide-react';
 
-export default function IncidentsTab({ incidents, onUpdateStatus }) {
+function formatTimestamp(ms) {
+  const totalSec = Math.floor((ms || 0) / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) {
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function getObjectLabel(inc) {
+  if (inc.class_names) {
+    try {
+      const parsed = typeof inc.class_names === 'string' ? JSON.parse(inc.class_names) : inc.class_names;
+      if (Array.isArray(parsed) && parsed.length) return parsed[0];
+      if (typeof parsed === 'string') return parsed;
+    } catch {
+      if (typeof inc.class_names === 'string' && !inc.class_names.startsWith('[')) {
+        return inc.class_names;
+      }
+    }
+  }
+  const match = (inc.reason || '').match(/waste object '([^']+)'/i);
+  return match ? match[1] : 'Waste object';
+}
+
+function ReviewStatus({ status }) {
+  const config = {
+    confirmed: { label: 'Confirmed', color: 'bg-[#3E7C59]', text: 'text-[#3E7C59]', bg: 'bg-[#EAF2EC]' },
+    false_alarm: { label: 'False alarm', color: 'bg-[#C94A4A]', text: 'text-[#C94A4A]', bg: 'bg-[#FBECEC]' },
+    pending: { label: 'Pending review', color: 'bg-[#C58B2A]', text: 'text-[#C58B2A]', bg: 'bg-[#FBF6EB]' },
+  };
+  const item = config[status] || config.pending;
+
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[12px] font-medium ${item.bg} ${item.text}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${item.color}`} />
+      {item.label}
+    </span>
+  );
+}
+
+function RuleTimeline() {
+  const steps = [
+    { key: 'N', label: 'Near' },
+    { key: 'R', label: 'Released' },
+    { key: 'S', label: 'Stationary' },
+    { key: 'M', label: 'Moved Away' },
+  ];
+
+  return (
+    <div className="rounded-xl border border-[#E2E7E2] bg-[#F6F7F3] p-3.5">
+      <p className="text-[11px] font-semibold text-[#8A948D] uppercase tracking-wide mb-3">
+        Event reasoning · L = N ∧ R ∧ S ∧ M
+      </p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {steps.map((step) => (
+          <React.Fragment key={step.key}>
+            <div className="flex flex-col items-center min-w-[58px]">
+              <div className="w-9 h-9 rounded-lg bg-[#1F4D3A] text-white flex items-center justify-center text-[13px] font-semibold">
+                {step.key}
+              </div>
+              <span className="text-[11px] text-[#647067] mt-1.5 text-center leading-tight">
+                {step.label}
+              </span>
+            </div>
+            <span className="text-[#8A948D] px-0.5 mb-4">→</span>
+          </React.Fragment>
+        ))}
+        <div className="flex flex-col items-center min-w-[72px]">
+          <div className="px-2.5 h-9 rounded-lg bg-[#C58B2A] text-white flex items-center justify-center text-[11px] font-semibold">
+            LITTERING
+          </div>
+          <span className="text-[11px] text-[#647067] mt-1.5">Suspected</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function IncidentsTab({ incidents, onUpdateStatus, onGoUpload }) {
   const [filter, setFilter] = useState('all');
   const [selectedIncident, setSelectedIncident] = useState(null);
 
@@ -18,234 +91,280 @@ export default function IncidentsTab({ incidents, onUpdateStatus }) {
     return inc.review_status === filter;
   });
 
-  const getStatusBadge = (status) => {
-    switch (status) {
-      case 'confirmed':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <CheckCircle2 className="w-3 h-3" /> Confirmed
-          </span>
-        );
-      case 'false_alarm':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20">
-            <XCircle className="w-3 h-3" /> False Alarm
-          </span>
-        );
-      default:
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-            <Clock className="w-3 h-3" /> Pending Review
-          </span>
-        );
-    }
-  };
+  const filters = [
+    { id: 'all', label: 'All' },
+    { id: 'pending', label: 'Pending' },
+    { id: 'confirmed', label: 'Confirmed' },
+    { id: 'false_alarm', label: 'False Alarm' },
+  ];
+
+  const pendingCount = incidents.filter((i) => i.review_status === 'pending' || !i.review_status).length;
 
   return (
     <div className="space-y-6">
-      {/* Header & Filter Tabs */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-slate-100 tracking-tight">Incident Review & Audit</h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Review snapshot images, extracted evidence clips, and confirm suspected littering events ($L = N \land R \land S \land M$).
+          <h2 className="text-[26px] font-semibold text-[#26312B] tracking-tight">Incident Review</h2>
+          <p className="text-[14px] text-[#647067] mt-1.5">
+            Review suspected littering events detected by the system.
           </p>
         </div>
-
-        {/* Filter Pills */}
-        <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800/80">
-          {['all', 'pending', 'confirmed', 'false_alarm'].map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-all ${
-                filter === f
-                  ? 'bg-slate-800 text-slate-100 font-semibold shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {f.replace('_', ' ')}
-            </button>
-          ))}
+        <div className="flex items-center gap-2 text-[12px] text-[#647067]">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#FBF6EB] text-[#C58B2A] font-medium">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            {pendingCount} pending
+          </span>
+          <span className="px-2.5 py-1 rounded-md bg-[#EEF1EC] font-medium text-[#26312B]">
+            {incidents.length} total
+          </span>
         </div>
       </div>
 
-      {/* Incidents Grid */}
+      <div className="flex items-center gap-1 border border-[#E2E7E2] rounded-lg bg-white p-1 w-fit">
+        {filters.map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            onClick={() => setFilter(f.id)}
+            className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors duration-150 ${
+              filter === f.id
+                ? 'bg-[#EAF2EC] text-[#1F4D3A]'
+                : 'text-[#647067] hover:text-[#26312B]'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
       {filteredIncidents.length === 0 ? (
-        <div className="bg-slate-950 border border-slate-800 rounded-lg py-16 text-center text-slate-400 text-xs">
-          No incidents match the selected filter.
+        <div className="lg-card py-14 px-6 text-center">
+          <div className="w-11 h-11 mx-auto mb-3 rounded-xl bg-[#EAF2EC] border border-[#E2E7E2] flex items-center justify-center text-[#1F4D3A]">
+            <Camera className="w-5 h-5" strokeWidth={1.75} />
+          </div>
+          <p className="text-[15px] font-medium text-[#26312B]">No incidents detected</p>
+          <p className="text-[13px] text-[#647067] mt-1 max-w-md mx-auto">
+            Suspected littering events will appear here after video processing.
+          </p>
+          {incidents.length === 0 && (
+            <button
+              type="button"
+              onClick={onGoUpload}
+              className="mt-4 inline-flex items-center px-3.5 py-2 rounded-lg bg-[#1F4D3A] hover:bg-[#183D2E] text-white text-[13px] font-medium transition-colors duration-150"
+            >
+              Upload Video
+            </button>
+          )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {filteredIncidents.map((inc) => {
-            const timeSec = (inc.timestamp_ms / 1000).toFixed(1);
+            const objectLabel = getObjectLabel(inc);
+            const conf = Math.round((inc.confidence || 0) * 100);
+
             return (
-              <div
-                key={inc.id}
-                className="bg-slate-950 border border-slate-800 rounded-lg overflow-hidden flex flex-col justify-between hover:border-slate-700 transition-colors"
-              >
-                {/* Snapshot Image */}
-                <div 
-                  className="relative aspect-video bg-black cursor-pointer group"
+              <article key={inc.id} className="lg-card overflow-hidden flex flex-col sm:flex-row">
+                <button
+                  type="button"
                   onClick={() => setSelectedIncident(inc)}
+                  className="sm:w-[42%] aspect-video sm:aspect-auto sm:min-h-[160px] bg-[#1a221e] shrink-0 relative overflow-hidden group"
                 >
                   {inc.snapshot_path ? (
                     <img
                       src={`/media/${inc.snapshot_path}`}
-                      alt="Incident Snapshot"
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      alt="Incident snapshot"
+                      className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
                     />
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center text-slate-600 text-xs">
-                      No snapshot image
+                    <div className="w-full h-full flex items-center justify-center text-[12px] text-[#8A948D]">
+                      No snapshot
                     </div>
                   )}
+                </button>
 
-                  <div className="absolute top-3 left-3">
-                    {getStatusBadge(inc.review_status)}
-                  </div>
-
-                  <div className="absolute top-3 right-3 bg-slate-950/80 backdrop-blur-sm px-2 py-0.5 rounded text-[11px] font-mono text-cyan-400 border border-slate-800">
-                    {Math.round(inc.confidence * 100)}% conf
-                  </div>
-
-                  <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <span className="px-3 py-1.5 rounded-full bg-cyan-500 text-slate-950 text-xs font-semibold flex items-center gap-1.5">
-                      <Play className="w-3.5 h-3.5 fill-current" /> Review Clip
-                    </span>
-                  </div>
-                </div>
-
-                {/* Content */}
-                <div className="p-4 space-y-3 flex-1 flex flex-col justify-between">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs text-slate-400">
-                      <span className="font-mono text-slate-300">
-                        {inc.video_filename || `Video #${inc.video_id}`}
-                      </span>
-                      <span className="font-mono text-cyan-400">@{timeSec}s</span>
+                <div className="flex-1 p-4 flex flex-col">
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div>
+                      <p className="text-[14px] font-semibold text-[#26312B]">Suspected littering</p>
+                      <p className="text-[13px] text-[#647067] mt-0.5 capitalize">
+                        {objectLabel} detected
+                      </p>
                     </div>
-
-                    <p className="text-xs text-slate-300 leading-relaxed font-sans line-clamp-2">
-                      {inc.reason}
-                    </p>
+                    <ReviewStatus status={inc.review_status} />
                   </div>
 
-                  {/* Actions */}
-                  <div className="pt-3 border-t border-slate-900 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => onUpdateStatus(inc.id, 'confirmed')}
-                        className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
-                          inc.review_status === 'confirmed'
-                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                            : 'bg-slate-900 text-slate-400 hover:text-emerald-400 border-slate-800'
-                        }`}
-                      >
-                        Confirm
-                      </button>
-                      <button
-                        onClick={() => onUpdateStatus(inc.id, 'false_alarm')}
-                        className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
-                          inc.review_status === 'false_alarm'
-                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                            : 'bg-slate-900 text-slate-400 hover:text-rose-400 border-slate-800'
-                        }`}
-                      >
-                        False Alarm
-                      </button>
-                    </div>
+                  <p className="text-[12px] text-[#8A948D] mb-3">
+                    {formatTimestamp(inc.timestamp_ms)} ·{' '}
+                    {inc.video_filename || `Video #${inc.video_id}`}
+                  </p>
 
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[12px] mb-3">
+                    <div>
+                      <p className="text-[#8A948D]">Confidence</p>
+                      <p className="font-semibold text-[#26312B] mt-0.5">{conf}%</p>
+                    </div>
+                    <div>
+                      <p className="text-[#8A948D]">Track</p>
+                      <p className="font-semibold text-[#26312B] mt-0.5">
+                        {inc.track_id != null ? `#${inc.track_id}` : '—'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="text-[12px] text-[#647067] line-clamp-2 mb-4 flex-1">
+                    <span className="font-medium text-[#26312B]">Reason: </span>
+                    {inc.reason || 'Rule engine flagged this event.'}
+                  </p>
+
+                  <div className="flex flex-wrap items-center gap-1.5 mt-auto">
                     <button
+                      type="button"
                       onClick={() => setSelectedIncident(inc)}
-                      className="p-1.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-900"
-                      title="Inspect clip"
+                      className="px-3 py-1.5 rounded-lg bg-[#1F4D3A] hover:bg-[#183D2E] text-white text-[12px] font-medium transition-colors duration-150"
                     >
-                      <ExternalLink className="w-4 h-4" />
+                      Review Incident
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateStatus(inc.id, 'confirmed')}
+                      className="px-2.5 py-1.5 rounded-lg border border-[#E2E7E2] bg-white text-[#26312B] hover:bg-[#EEF1EC] text-[12px] font-medium transition-colors duration-150"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateStatus(inc.id, 'false_alarm')}
+                      className="px-2.5 py-1.5 rounded-lg border border-[#E2E7E2] bg-white text-[#C94A4A] hover:bg-[#FBECEC] text-[12px] font-medium transition-colors duration-150"
+                    >
+                      False Alarm
                     </button>
                   </div>
                 </div>
-              </div>
+              </article>
             );
           })}
         </div>
       )}
 
-      {/* Detail & Evidence Clip Modal */}
       {selectedIncident && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-lg max-w-3xl w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+        <div className="fixed inset-0 z-50 bg-[#26312B]/40 flex items-center justify-center p-4">
+          <div className="lg-card max-w-5xl w-full max-h-[90vh] overflow-y-auto p-5">
+            <div className="flex items-start justify-between gap-4 mb-5">
               <div>
-                <h3 className="text-base font-semibold text-slate-100">
-                  Incident Evidence: #{selectedIncident.id}
-                </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Extracted 5-second evidence clip around event timestamp ({(selectedIncident.timestamp_ms / 1000).toFixed(1)}s).
+                <h3 className="text-[18px] font-semibold text-[#26312B]">Suspected Littering</h3>
+                <p className="text-[13px] text-[#647067] mt-0.5">
+                  Incident #{selectedIncident.id} · Evidence review
                 </p>
               </div>
               <button
+                type="button"
                 onClick={() => setSelectedIncident(null)}
-                className="text-slate-400 hover:text-slate-200 text-xs px-2.5 py-1 rounded bg-slate-800"
+                className="text-[13px] text-[#647067] hover:text-[#26312B] transition-colors duration-150"
               >
-                Close (Esc)
+                Close
               </button>
             </div>
 
-            {/* Video Clip Player */}
-            <div className="aspect-video bg-black rounded-lg overflow-hidden border border-slate-800">
-              {selectedIncident.clip_path ? (
-                <video
-                  controls
-                  autoPlay
-                  src={`/media/${selectedIncident.clip_path}`}
-                  className="w-full h-full object-contain"
-                >
-                  Your browser does not support video playback.
-                </video>
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs">
-                  No video clip extracted for this event.
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+              <div className="lg:col-span-3 space-y-3">
+                <div className="aspect-video bg-[#1a221e] rounded-xl overflow-hidden border border-[#E2E7E2]">
+                  {selectedIncident.clip_path ? (
+                    <video
+                      controls
+                      autoPlay
+                      src={`/media/${selectedIncident.clip_path}`}
+                      className="w-full h-full object-contain"
+                    >
+                      Your browser does not support video playback.
+                    </video>
+                  ) : selectedIncident.snapshot_path ? (
+                    <img
+                      src={`/media/${selectedIncident.snapshot_path}`}
+                      alt="Incident evidence"
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-[13px] text-[#8A948D]">
+                      No evidence available
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-
-            <div className="p-3 rounded bg-slate-950 border border-slate-800 text-xs text-slate-300 space-y-1">
-              <span className="text-cyan-400 font-medium">Detection Reason:</span>
-              <p className="text-slate-400 leading-relaxed font-sans">{selectedIncident.reason}</p>
-            </div>
-
-            <div className="flex justify-between items-center pt-2">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    onUpdateStatus(selectedIncident.id, 'confirmed');
-                    setSelectedIncident({ ...selectedIncident, review_status: 'confirmed' });
-                  }}
-                  className="px-3 py-1.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30"
-                >
-                  Confirm Littering
-                </button>
-                <button
-                  onClick={() => {
-                    onUpdateStatus(selectedIncident.id, 'false_alarm');
-                    setSelectedIncident({ ...selectedIncident, review_status: 'false_alarm' });
-                  }}
-                  className="px-3 py-1.5 rounded text-xs font-medium bg-rose-500/20 text-rose-300 border border-rose-500/30 hover:bg-rose-500/30"
-                >
-                  Mark False Alarm
-                </button>
+                {selectedIncident.clip_path && (
+                  <a
+                    href={`/media/${selectedIncident.clip_path}`}
+                    download
+                    className="text-[13px] text-[#1F4D3A] hover:underline font-medium"
+                  >
+                    Download evidence clip
+                  </a>
+                )}
               </div>
 
-              {selectedIncident.clip_path && (
-                <a
-                  href={`/media/${selectedIncident.clip_path}`}
-                  download
-                  className="text-xs text-cyan-400 hover:underline"
-                >
-                  Download Evidence Clip (.mp4)
-                </a>
-              )}
+              <div className="lg:col-span-2 space-y-4">
+                <div className="space-y-3 text-[13px]">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[#647067]">Status</span>
+                    <ReviewStatus status={selectedIncident.review_status} />
+                  </div>
+                  <div className="flex items-center justify-between gap-3 border-t border-[#E2E7E2] pt-3">
+                    <span className="text-[#647067]">Detected object</span>
+                    <span className="font-semibold text-[#26312B] capitalize">
+                      {getObjectLabel(selectedIncident)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 border-t border-[#E2E7E2] pt-3">
+                    <span className="text-[#647067]">Confidence</span>
+                    <span className="font-semibold text-[#26312B]">
+                      {Math.round((selectedIncident.confidence || 0) * 100)}%
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 border-t border-[#E2E7E2] pt-3">
+                    <span className="text-[#647067]">Timestamp</span>
+                    <span className="font-semibold text-[#26312B]">
+                      {formatTimestamp(selectedIncident.timestamp_ms)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 border-t border-[#E2E7E2] pt-3">
+                    <span className="text-[#647067]">Video</span>
+                    <span className="font-medium text-[#26312B] text-right truncate max-w-[55%]">
+                      {selectedIncident.video_filename || `#${selectedIncident.video_id}`}
+                    </span>
+                  </div>
+                </div>
+
+                <RuleTimeline />
+
+                <div>
+                  <p className="text-[12px] font-semibold text-[#26312B] mb-1.5">Event reasoning</p>
+                  <p className="text-[13px] text-[#647067] leading-relaxed">
+                    {selectedIncident.reason ||
+                      'N — Object appeared near person · R — Released · S — Remained stationary · M — Person moved away'}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onUpdateStatus(selectedIncident.id, 'confirmed');
+                      setSelectedIncident({ ...selectedIncident, review_status: 'confirmed' });
+                    }}
+                    className="px-3 py-2 rounded-lg bg-[#3E7C59] hover:bg-[#34684A] text-white text-[13px] font-medium transition-colors duration-150"
+                  >
+                    Confirm littering
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onUpdateStatus(selectedIncident.id, 'false_alarm');
+                      setSelectedIncident({ ...selectedIncident, review_status: 'false_alarm' });
+                    }}
+                    className="px-3 py-2 rounded-lg border border-[#E2E7E2] bg-white text-[#C94A4A] hover:bg-[#FBECEC] text-[13px] font-medium transition-colors duration-150"
+                  >
+                    Mark False Alarm
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

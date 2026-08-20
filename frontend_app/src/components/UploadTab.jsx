@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, FileVideo, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { Camera, Plus } from 'lucide-react';
 
 export default function UploadTab({ onUploadSuccess }) {
   const [isDragging, setIsDragging] = useState(false);
@@ -34,7 +34,6 @@ export default function UploadTab({ onUploadSuccess }) {
 
   const validateAndSetFile = (selectedFile) => {
     setError(null);
-    const validTypes = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-matroska', 'video/webm'];
     const ext = selectedFile.name.split('.').pop().toLowerCase();
     const validExts = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'];
 
@@ -66,8 +65,7 @@ export default function UploadTab({ onUploadSuccess }) {
 
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
-        const percentComplete = Math.round((e.loaded / e.total) * 100);
-        setProgress(percentComplete);
+        setProgress(Math.round((e.loaded / e.total) * 100));
       }
     };
 
@@ -76,9 +74,7 @@ export default function UploadTab({ onUploadSuccess }) {
       if (xhr.status === 201 || xhr.status === 200) {
         const data = JSON.parse(xhr.responseText);
         setFile(null);
-        if (onUploadSuccess) {
-          onUploadSuccess(data);
-        }
+        if (onUploadSuccess) onUploadSuccess(data);
       } else {
         try {
           const err = JSON.parse(xhr.responseText);
@@ -98,93 +94,94 @@ export default function UploadTab({ onUploadSuccess }) {
   };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="max-w-2xl space-y-6">
       <div>
-        <h2 className="text-xl font-semibold text-slate-100 tracking-tight">Upload Video</h2>
-        <p className="text-xs text-slate-400 mt-1">
-          Upload CCTV, webcam, or public space video footage to run real-time YOLOv8 + ByteTrack litter detection.
+        <h2 className="text-[26px] font-semibold text-[#26312B] tracking-tight">Upload Video</h2>
+        <p className="text-[14px] text-[#647067] mt-1.5">
+          Add CCTV, webcam or public-space footage for litter detection.
         </p>
       </div>
 
-      {/* Upload Dropzone */}
-      <div
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={() => fileInputRef.current?.click()}
-        className={`relative border-2 border-dashed rounded-lg p-10 text-center cursor-pointer transition-all ${
-          isDragging
-            ? 'border-cyan-400 bg-cyan-500/5'
-            : 'border-slate-800 hover:border-slate-700 bg-slate-950/40'
-        }`}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="video/*"
-          className="hidden"
-          onChange={handleFileSelect}
-        />
+      <div className="lg-card overflow-hidden">
+        <div className="h-[3px] bg-[#3E7C59]" />
+        <div
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`px-6 py-10 sm:py-12 text-center transition-colors duration-150 ${
+            isDragging ? 'bg-[#EAF2EC]' : 'bg-white'
+          }`}
+          style={{
+            backgroundImage: isDragging
+              ? undefined
+              : `linear-gradient(rgba(31,77,58,0.025) 1px, transparent 1px),
+                 linear-gradient(90deg, rgba(31,77,58,0.025) 1px, transparent 1px)`,
+            backgroundSize: '24px 24px',
+          }}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="video/*"
+            className="hidden"
+            onChange={handleFileSelect}
+          />
 
-        <div className="space-y-4">
-          <div className="w-12 h-12 rounded-full bg-slate-900 border border-slate-800 mx-auto flex items-center justify-center text-cyan-400">
-            <UploadCloud className="w-6 h-6" />
+          <div className="w-11 h-11 mx-auto mb-4 rounded-xl bg-[#EAF2EC] border border-[#E2E7E2] flex items-center justify-center text-[#1F4D3A]">
+            <Camera className="w-5 h-5" strokeWidth={1.75} />
           </div>
 
-          <div>
-            <p className="text-sm font-medium text-slate-200">
-              Click to upload or drag & drop video clip
-            </p>
-            <p className="text-xs text-slate-400 mt-1">
-              Supports MP4, MOV, AVI, MKV, WEBM (Max 500 MB)
-            </p>
-          </div>
+          <p className="text-[15px] font-medium text-[#26312B]">Drop video here</p>
+          <p className="text-[13px] text-[#8A948D] mt-1 mb-4">or</p>
+
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#1F4D3A] hover:bg-[#183D2E] text-white text-[13px] font-medium transition-colors duration-150 disabled:opacity-50"
+          >
+            <Plus className="w-4 h-4" />
+            Choose video
+          </button>
+
+          <p className="text-[12px] text-[#8A948D] mt-5">
+            MP4 · MOV · AVI · MKV · WEBM
+          </p>
+          <p className="text-[12px] text-[#8A948D] mt-0.5">Maximum 500 MB</p>
         </div>
       </div>
 
-      {/* Error Message */}
-      {error && (
-        <div className="p-3.5 rounded-md bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-2.5">
-          <AlertCircle className="w-4 h-4 flex-shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
+      {error && <p className="text-[13px] text-[#C94A4A]">{error}</p>}
 
-      {/* Selected File Card & Actions */}
       {file && (
-        <div className="p-4 rounded-lg bg-slate-950 border border-slate-800 space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded bg-slate-900 border border-slate-800 flex items-center justify-center text-cyan-400">
-                <FileVideo className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="text-xs font-medium text-slate-200">{file.name}</p>
-                <p className="text-[11px] text-slate-400">
-                  {(file.size / (1024 * 1024)).toFixed(2)} MB
-                </p>
-              </div>
+        <div className="lg-card p-4 space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[13px] font-medium text-[#26312B] truncate">{file.name}</p>
+              <p className="text-[12px] text-[#8A948D] mt-0.5">
+                {(file.size / (1024 * 1024)).toFixed(2)} MB
+              </p>
             </div>
             {!uploading && (
               <button
+                type="button"
                 onClick={() => setFile(null)}
-                className="text-xs text-slate-400 hover:text-slate-200"
+                className="text-[13px] text-[#647067] hover:text-[#26312B] transition-colors duration-150"
               >
                 Remove
               </button>
             )}
           </div>
 
-          {/* Upload Progress Bar */}
           {uploading && (
             <div className="space-y-1.5">
-              <div className="flex justify-between text-xs text-slate-400">
-                <span>Uploading to processing queue...</span>
-                <span className="font-mono">{progress}%</span>
+              <div className="flex justify-between text-[12px] text-[#647067]">
+                <span>Uploading…</span>
+                <span className="font-medium text-[#26312B]">{progress}%</span>
               </div>
-              <div className="h-1.5 w-full bg-slate-900 rounded-full overflow-hidden">
+              <div className="h-1.5 w-full bg-[#EEF1EC] rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-cyan-400 transition-all duration-200"
+                  className="h-full bg-[#3E7C59] transition-all duration-200"
                   style={{ width: `${progress}%` }}
                 />
               </div>
@@ -193,10 +190,11 @@ export default function UploadTab({ onUploadSuccess }) {
 
           {!uploading && (
             <button
+              type="button"
               onClick={uploadFile}
-              className="w-full py-2.5 px-4 rounded-md bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-medium text-xs tracking-wide transition-colors flex items-center justify-center gap-2"
+              className="inline-flex items-center px-3.5 py-2 rounded-lg bg-[#1F4D3A] hover:bg-[#183D2E] text-white text-[13px] font-medium transition-colors duration-150"
             >
-              Start Litter Detection Pipeline
+              Start detection
             </button>
           )}
         </div>

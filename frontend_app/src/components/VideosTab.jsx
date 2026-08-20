@@ -1,183 +1,264 @@
 import React, { useState } from 'react';
-import { 
-  Film, 
-  Play, 
-  RefreshCw, 
-  AlertTriangle, 
-  CheckCircle2, 
-  Clock, 
-  XCircle, 
-  Loader2,
-  Eye,
-  FileText
-} from 'lucide-react';
+import { Film, Loader2, AlertTriangle, Camera } from 'lucide-react';
 
-export default function VideosTab({ videos, onReprocess, liveStats }) {
+function StatusDot({ status }) {
+  const config = {
+    completed: { label: 'Completed', color: 'bg-[#3E7C59]', pulse: false },
+    processing: { label: 'Processing', color: 'bg-[#4D7185]', pulse: true },
+    failed: { label: 'Failed', color: 'bg-[#C94A4A]', pulse: false },
+    queued: { label: 'Queued', color: 'bg-[#8A948D]', pulse: false },
+    pending: { label: 'Queued', color: 'bg-[#8A948D]', pulse: false },
+  };
+  const item = config[status] || config.pending;
+
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[13px] text-[#26312B]">
+      <span className={`w-1.5 h-1.5 rounded-full ${item.color} ${item.pulse ? 'lg-pulse' : ''}`} />
+      {item.label}
+    </span>
+  );
+}
+
+function StatCard({ icon: Icon, label, value, hint, accent }) {
+  return (
+    <div className="lg-card p-4 relative overflow-hidden">
+      <div className={`absolute left-0 top-0 bottom-0 w-[3px] ${accent}`} />
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[12px] text-[#647067] font-medium">{label}</p>
+          <p className="text-[24px] font-semibold text-[#26312B] mt-1 leading-none">{value}</p>
+          <p className="text-[12px] text-[#8A948D] mt-1.5">{hint}</p>
+        </div>
+        <div className="w-8 h-8 rounded-lg bg-[#EAF2EC] flex items-center justify-center text-[#1F4D3A]">
+          <Icon className="w-4 h-4" strokeWidth={1.75} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function VideosTab({ videos, incidents = [], onReprocess, liveStats, onGoUpload }) {
   const [selectedVideo, setSelectedVideo] = useState(null);
 
-  const getStatusBadge = (status) => {
-    switch (status) {
-      case 'completed':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <CheckCircle2 className="w-3.5 h-3.5" /> Completed
-          </span>
-        );
-      case 'processing':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 animate-pulse">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing
-          </span>
-        );
-      case 'failed':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20">
-            <XCircle className="w-3.5 h-3.5" /> Failed
-          </span>
-        );
-      default:
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700">
-            <Clock className="w-3.5 h-3.5" /> Pending
-          </span>
-        );
-    }
-  };
+  const processingCount = videos.filter((v) => v.status === 'processing').length;
+  const completedCount = videos.filter((v) => v.status === 'completed').length;
+  const incidentCount = incidents.length;
 
   return (
     <div className="space-y-6">
-      {/* Header & Stats Cards */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-slate-100 tracking-tight">Videos & Output Review</h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Real-time pipeline queue, output video preview, and incident detection metrics.
+          <h2 className="text-[26px] font-semibold text-[#26312B] tracking-tight">Videos & Output</h2>
+          <p className="text-[14px] text-[#647067] mt-1.5">
+            Monitor uploaded footage, processing progress and detected events.
           </p>
         </div>
+        <button
+          type="button"
+          onClick={onGoUpload}
+          className="inline-flex items-center self-start px-3.5 py-2 rounded-lg bg-[#1F4D3A] hover:bg-[#183D2E] text-white text-[13px] font-medium transition-colors duration-150"
+        >
+          + Upload Video
+        </button>
       </div>
 
-      {/* Videos List Table */}
-      <div className="bg-slate-950 border border-slate-800/80 rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-300">
-            <thead className="bg-slate-900/60 border-b border-slate-800 text-[11px] uppercase tracking-wider text-slate-400 font-semibold">
-              <tr>
-                <th className="py-3.5 px-4">Video File</th>
-                <th className="py-3.5 px-4">Status</th>
-                <th className="py-3.5 px-4">Progress / FPS</th>
-                <th className="py-3.5 px-4">Incidents</th>
-                <th className="py-3.5 px-4">Uploaded</th>
-                <th className="py-3.5 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60 font-mono text-[12px]">
-              {videos.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="py-12 text-center text-slate-400 font-sans">
-                    No videos uploaded yet. Go to the Upload tab to add footage.
-                  </td>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <StatCard
+          icon={Film}
+          label="Videos"
+          value={videos.length}
+          hint="uploaded"
+          accent="bg-[#3E7C59]"
+        />
+        <StatCard
+          icon={Loader2}
+          label="Processing"
+          value={processingCount}
+          hint="active"
+          accent="bg-[#4D7185]"
+        />
+        <StatCard
+          icon={AlertTriangle}
+          label="Incidents"
+          value={incidentCount}
+          hint="detected"
+          accent="bg-[#C58B2A]"
+        />
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {[
+          { label: 'Processing', value: processingCount, color: 'text-[#4D7185] bg-[#EEF1EC]' },
+          { label: 'Completed', value: completedCount, color: 'text-[#3E7C59] bg-[#EAF2EC]' },
+          { label: 'Incidents', value: incidentCount, color: 'text-[#C58B2A] bg-[#FBF6EB]' },
+        ].map((chip) => (
+          <span
+            key={chip.label}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-medium ${chip.color}`}
+          >
+            {chip.label}
+            <span className="font-semibold">{chip.value}</span>
+          </span>
+        ))}
+      </div>
+
+      <div className="lg-card overflow-hidden">
+        <div className="px-4 py-3 border-b border-[#E2E7E2] flex items-center justify-between">
+          <h3 className="text-[14px] font-semibold text-[#26312B]">Video processing</h3>
+          <span className="text-[12px] text-[#8A948D]">{videos.length} total</span>
+        </div>
+
+        {videos.length === 0 ? (
+          <div className="py-14 px-6 text-center">
+            <div className="w-11 h-11 mx-auto mb-3 rounded-xl bg-[#EAF2EC] border border-[#E2E7E2] flex items-center justify-center text-[#1F4D3A]">
+              <Camera className="w-5 h-5" strokeWidth={1.75} />
+            </div>
+            <p className="text-[15px] font-medium text-[#26312B]">No videos yet</p>
+            <p className="text-[13px] text-[#647067] mt-1 max-w-sm mx-auto">
+              Upload CCTV or public-space footage to begin detection.
+            </p>
+            <button
+              type="button"
+              onClick={onGoUpload}
+              className="mt-4 inline-flex items-center px-3.5 py-2 rounded-lg bg-[#1F4D3A] hover:bg-[#183D2E] text-white text-[13px] font-medium transition-colors duration-150"
+            >
+              Upload Video
+            </button>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-[13px]">
+              <thead>
+                <tr className="border-b border-[#E2E7E2] text-[12px] text-[#647067] font-medium bg-[#F6F7F3]/70">
+                  <th className="py-3 px-4 font-medium">Video</th>
+                  <th className="py-3 px-4 font-medium">Status</th>
+                  <th className="py-3 px-4 font-medium">Progress</th>
+                  <th className="py-3 px-4 font-medium">FPS</th>
+                  <th className="py-3 px-4 font-medium">Incidents</th>
+                  <th className="py-3 px-4 font-medium">Uploaded</th>
+                  <th className="py-3 px-4 font-medium text-right">Actions</th>
                 </tr>
-              ) : (
-                videos.map((vid) => {
+              </thead>
+              <tbody>
+                {videos.map((vid, idx) => {
                   const stats = liveStats[vid.id] || {};
                   const isProcessing = vid.status === 'processing';
                   const processedFrames = stats.processed_frames || vid.processed_frames || 0;
                   const totalFrames = stats.total_frames || vid.total_frames || 0;
                   const pct = totalFrames > 0 ? Math.round((processedFrames / totalFrames) * 100) : 0;
-                  const incidentsCount = stats.detected_incidents !== undefined ? stats.detected_incidents : (vid.detected_incidents || 0);
+                  const incidentsCount =
+                    stats.detected_incidents !== undefined
+                      ? stats.detected_incidents
+                      : vid.detected_incidents || 0;
 
                   return (
-                    <tr key={vid.id} className="hover:bg-slate-900/40 transition-colors">
-                      <td className="py-3.5 px-4 font-sans font-medium text-slate-200">
-                        <div className="flex items-center gap-2.5">
-                          <Film className="w-4 h-4 text-slate-400 flex-shrink-0" />
-                          <span className="truncate max-w-xs">{vid.filename}</span>
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-4 font-sans">
-                        {getStatusBadge(vid.status)}
+                    <tr
+                      key={vid.id}
+                      className={`border-b border-[#E2E7E2] last:border-b-0 transition-colors duration-150 hover:bg-[#EAF2EC]/50 ${
+                        idx % 2 === 1 ? 'bg-[#F6F7F3]/40' : 'bg-white'
+                      }`}
+                    >
+                      <td className="py-3.5 px-4 max-w-[240px]">
+                        <p className="font-medium text-[#26312B] truncate">{vid.filename}</p>
+                        <p className="text-[12px] text-[#8A948D] mt-0.5">
+                          {totalFrames || vid.total_frames
+                            ? `${totalFrames || vid.total_frames} frames`
+                            : '—'}
+                        </p>
                       </td>
                       <td className="py-3.5 px-4">
+                        <StatusDot status={vid.status} />
+                      </td>
+                      <td className="py-3.5 px-4 text-[#647067]">
                         {isProcessing ? (
-                          <div className="space-y-1 w-36 font-sans">
-                            <div className="flex justify-between text-[11px] text-slate-400">
-                              <span>{processedFrames}/{totalFrames || '?'}</span>
-                              <span>{pct}%</span>
+                          <div className="space-y-1 w-36">
+                            <div className="flex justify-between text-[12px]">
+                              <span>
+                                {processedFrames} / {totalFrames || '?'}
+                              </span>
+                              <span className="font-medium text-[#26312B]">{pct}%</span>
                             </div>
-                            <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                            <div className="h-1 bg-[#EEF1EC] rounded-full overflow-hidden">
                               <div
-                                className="h-full bg-cyan-400 transition-all duration-300"
+                                className="h-full bg-[#3E7C59] transition-all duration-300"
                                 style={{ width: `${pct}%` }}
                               />
                             </div>
                           </div>
                         ) : (
-                          <span className="text-slate-400 font-sans">
-                            {vid.processed_frames ? `${vid.processed_frames} frames` : '-'}
-                            {vid.fps ? ` • ${vid.fps} FPS` : ''}
+                          <span>
+                            {vid.processed_frames ? `${vid.processed_frames} frames` : '—'}
                           </span>
                         )}
                       </td>
+                      <td className="py-3.5 px-4 text-[#647067]">{vid.fps || '—'}</td>
                       <td className="py-3.5 px-4">
-                        {incidentsCount > 0 ? (
-                          <span className="inline-flex items-center gap-1 text-rose-400 font-semibold bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20">
-                            <AlertTriangle className="w-3.5 h-3.5" /> {incidentsCount}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400">0</span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-400 font-sans text-[11px]">
-                        {new Date(vid.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </td>
-                      <td className="py-3.5 px-4 text-right font-sans space-x-2">
-                        {vid.status === 'completed' && (
-                          <button
-                            onClick={() => setSelectedVideo(vid)}
-                            className="px-2.5 py-1 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
-                          >
-                            <Eye className="w-3.5 h-3.5" /> Output
-                          </button>
-                        )}
-                        <button
-                          onClick={() => onReprocess(vid.id)}
-                          disabled={isProcessing}
-                          className="px-2.5 py-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-50 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
+                        <span
+                          className={`font-medium ${
+                            incidentsCount > 0 ? 'text-[#C58B2A]' : 'text-[#26312B]'
+                          }`}
                         >
-                          <RefreshCw className="w-3.5 h-3.5" /> Re-run
-                        </button>
+                          {incidentsCount}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-[#647067] whitespace-nowrap">
+                        {new Date(vid.created_at).toLocaleString([], {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </td>
+                      <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1.5">
+                          {vid.status === 'completed' && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedVideo(vid)}
+                              className="px-2.5 py-1.5 rounded-lg border border-[#E2E7E2] bg-white text-[#26312B] hover:bg-[#EEF1EC] text-[12px] font-medium transition-colors duration-150"
+                            >
+                              View
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => onReprocess(vid.id)}
+                            disabled={isProcessing}
+                            className="px-2.5 py-1.5 rounded-lg border border-[#E2E7E2] bg-white text-[#26312B] hover:bg-[#EEF1EC] text-[12px] font-medium transition-colors duration-150 disabled:opacity-40"
+                          >
+                            Re-run
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      {/* Output Video Review Modal */}
       {selectedVideo && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-lg max-w-4xl w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-              <div>
-                <h3 className="text-base font-semibold text-slate-100">
-                  Annotated Output Review: {selectedVideo.filename}
+        <div className="fixed inset-0 z-50 bg-[#26312B]/40 flex items-center justify-center p-4">
+          <div className="lg-card max-w-4xl w-full p-5 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 className="text-[17px] font-semibold text-[#26312B] truncate">
+                  {selectedVideo.filename}
                 </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Full YOLOv8 bounding boxes, track IDs, and top-right HUD `Assoc (Trash, Person)` overlay.
-                </p>
+                <p className="text-[13px] text-[#647067] mt-0.5">Annotated output preview</p>
               </div>
               <button
+                type="button"
                 onClick={() => setSelectedVideo(null)}
-                className="text-slate-400 hover:text-slate-200 text-xs px-2.5 py-1 rounded bg-slate-800"
+                className="text-[13px] text-[#647067] hover:text-[#26312B] transition-colors duration-150"
               >
-                Close (Esc)
+                Close
               </button>
             </div>
 
-            <div className="aspect-video bg-black rounded-lg overflow-hidden border border-slate-800">
+            <div className="aspect-video bg-[#1a221e] rounded-lg overflow-hidden">
               <video
                 controls
                 autoPlay
@@ -188,16 +269,17 @@ export default function VideosTab({ videos, onReprocess, liveStats }) {
               </video>
             </div>
 
-            <div className="flex justify-between items-center text-xs text-slate-400 pt-2">
-              <span className="font-mono">
-                Duration: {((selectedVideo.duration_ms || 0) / 1000).toFixed(1)}s • FPS: {selectedVideo.fps || '-'}
+            <div className="flex justify-between items-center text-[13px] text-[#647067]">
+              <span>
+                Duration: {((selectedVideo.duration_ms || 0) / 1000).toFixed(1)}s · FPS:{' '}
+                {selectedVideo.fps || '—'}
               </span>
               <a
                 href={`/media/output/${selectedVideo.id}.mp4`}
                 download
-                className="text-cyan-400 hover:underline inline-flex items-center gap-1"
+                className="text-[#1F4D3A] hover:underline font-medium"
               >
-                Download Output Video
+                Download
               </a>
             </div>
           </div>

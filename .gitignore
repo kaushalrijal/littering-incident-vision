@@ -9,3 +9,5 @@ dataset
 *.mp4
 *.mov
 backend/storage/snapshots/**/*.jpg
+/minor
+/litter.db

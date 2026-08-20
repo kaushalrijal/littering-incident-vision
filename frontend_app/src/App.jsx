@@ -6,11 +6,12 @@ import IncidentsTab from './components/IncidentsTab';
 import WebcamTab from './components/WebcamTab';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('upload');
+  const [activeTab, setActiveTab] = useState('videos');
   const [videos, setVideos] = useState([]);
   const [incidents, setIncidents] = useState([]);
   const [liveStats, setLiveStats] = useState({});
   const [wsConnected, setWsConnected] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -77,14 +78,13 @@ export default function App() {
 
     ws.onclose = () => {
       setWsConnected(false);
-      // Reconnect after 3 seconds
       setTimeout(setupWebSocket, 3000);
     };
 
     wsRef.current = ws;
   };
 
-  const handleUploadSuccess = (newVideo) => {
+  const handleUploadSuccess = () => {
     fetchVideos();
     setActiveTab('videos');
   };
@@ -125,54 +125,60 @@ export default function App() {
 
   const activeProcessingCount = videos.filter((v) => v.status === 'processing').length;
 
+  const handleSetActiveTab = (tab) => {
+    setActiveTab(tab);
+    setSidebarOpen(false);
+  };
+
   return (
-    <div className="flex h-screen bg-slate-900 overflow-hidden font-sans">
-      {/* Roboflow-inspired Left Sidebar */}
+    <div className="flex h-screen lg-grid-bg overflow-hidden font-sans">
+      {sidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close sidebar"
+          className="fixed inset-0 z-30 bg-[#26312B]/25 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       <Sidebar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={handleSetActiveTab}
         wsConnected={wsConnected}
         activeProcessingCount={activeProcessingCount}
+        open={sidebarOpen}
       />
 
-      {/* Main Workspace Area */}
-      <main className="flex-1 flex flex-col min-w-0 bg-slate-900 overflow-y-auto">
-        {/* Top Minimal Bar */}
-        <header className="h-16 border-b border-slate-800/80 px-8 flex items-center justify-between bg-slate-950/40 sticky top-0 z-10 backdrop-blur-md">
-          <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold text-slate-200 capitalize">
-              {activeTab.replace('_', ' ')}
-            </h2>
-            <span className="text-slate-600">•</span>
-            <span className="text-xs text-slate-400 font-mono">
-              Purwanchal Campus • Minor Project
-            </span>
-          </div>
+      <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+        <div className="lg:hidden px-4 pt-4">
+          <button
+            type="button"
+            className="p-1.5 text-[#647067] hover:text-[#26312B] hover:bg-[#EEF1EC] rounded-lg transition-colors duration-150"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open menu"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+        </div>
 
-          <div className="flex items-center gap-3 text-xs text-slate-400">
-            <span className="px-2.5 py-1 rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono">
-              {videos.length} Videos
-            </span>
-            <span className="px-2.5 py-1 rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono">
-              {incidents.length} Incidents
-            </span>
-          </div>
-        </header>
-
-        {/* Tab Content Body */}
-        <div className="p-8 max-w-7xl w-full mx-auto">
+        <div className="p-5 sm:p-8 max-w-6xl w-full mx-auto">
           {activeTab === 'upload' && <UploadTab onUploadSuccess={handleUploadSuccess} />}
           {activeTab === 'videos' && (
             <VideosTab
               videos={videos}
+              incidents={incidents}
               onReprocess={handleReprocess}
               liveStats={liveStats}
+              onGoUpload={() => handleSetActiveTab('upload')}
             />
           )}
           {activeTab === 'incidents' && (
             <IncidentsTab
               incidents={incidents}
               onUpdateStatus={handleUpdateIncidentStatus}
+              onGoUpload={() => handleSetActiveTab('upload')}
             />
           )}
           {activeTab === 'webcam' && <WebcamTab />}

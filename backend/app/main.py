@@ -6,12 +6,14 @@ Run with:  python run.py   (or: uvicorn backend.app.main:app --reload)
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
 from backend.app import db
 from backend.app.config import settings
-from backend.app.routers import incidents, videos
+from backend.app.routers import incidents, videos, webcam
+from backend.app.services.websocket_manager import ws_manager
 from backend.app.services.worker import worker
 
 logging.basicConfig(
@@ -21,9 +23,14 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
+from backend.app.utils import ensure_openh264
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ensure_openh264()
     db.init_db()
+    ws_manager.set_loop(asyncio.get_running_loop())
     worker.start()
     logger.info("Application started")
     yield
@@ -48,12 +55,23 @@ def health():
     return {"status": "ok", "service": app.title, "version": app.version}
 
 
+@app.websocket("/ws/events")
+async def websocket_events(websocket: WebSocket):
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+
+
 # API routes must be registered before the static mounts so /api/* wins.
 app.include_router(videos.router, prefix="/api")
 app.include_router(incidents.router, prefix="/api")
+app.include_router(webcam.router)
 
 # Stored media (uploaded videos, snapshots, evidence clips).
 app.mount("/media", StaticFiles(directory=settings.storage_dir), name="media")
 
-# Dashboard (vanilla HTML/CSS/JS, no build step).
+# Dashboard (React frontend app static mount).
 app.mount("/", StaticFiles(directory=settings.frontend_dir, html=True), name="frontend")

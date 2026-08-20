@@ -16,6 +16,9 @@ from backend.app.services.pipeline import Pipeline
 logger = logging.getLogger("worker")
 
 
+from backend.app.services.websocket_manager import ws_manager
+
+
 class ProcessingWorker:
     def __init__(self) -> None:
         self._queue: "queue.Queue[int]" = queue.Queue()
@@ -43,6 +46,11 @@ class ProcessingWorker:
 
     def enqueue(self, video_id: int) -> None:
         self._queue.put(video_id)
+        ws_manager.broadcast_sync({
+            "type": "video_status",
+            "video_id": video_id,
+            "status": "pending"
+        })
 
     # ------------------------------------------------------------------
     def _run(self) -> None:
@@ -59,10 +67,6 @@ class ProcessingWorker:
                 logger.exception("Unhandled error while processing video %s", item)
 
     def _process_one(self, video_id: int) -> None:
-        # Dedupe: a video may be enqueued twice (auto-enqueue after upload plus
-        # a manual 'Process' click, or a fast double click). A row that is
-        # already processing/completed must not run again or its incidents
-        # would be duplicated by the pipeline's insert-without-clear.
         video = db.get_video(video_id)
         if video is None:
             logger.warning("Skipping missing video %s", video_id)
@@ -72,6 +76,12 @@ class ProcessingWorker:
             return
 
         db.update_video(video_id, status="processing", error=None)
+        ws_manager.broadcast_sync({
+            "type": "video_status",
+            "video_id": video_id,
+            "status": "processing"
+        })
+
         try:
             detector = self._get_detector()
             pipeline = Pipeline(detector)
@@ -82,11 +92,28 @@ class ProcessingWorker:
                     processed_frames=stats.get("processed_frames", 0),
                     detected_incidents=stats.get("detected_incidents", 0),
                 )
+                ws_manager.broadcast_sync({
+                    "type": "video_progress",
+                    "video_id": video_id,
+                    "stats": stats
+                })
 
-            pipeline.process(video_id, persist=True, progress_cb=progress)
+            res = pipeline.process(video_id, persist=True, progress_cb=progress)
+            ws_manager.broadcast_sync({
+                "type": "video_status",
+                "video_id": video_id,
+                "status": "completed",
+                "stats": res
+            })
         except Exception as exc:
             logger.exception("Processing failed for video %s", video_id)
             db.update_video(video_id, status="failed", error=str(exc)[:1000])
+            ws_manager.broadcast_sync({
+                "type": "video_status",
+                "video_id": video_id,
+                "status": "failed",
+                "error": str(exc)[:1000]
+            })
 
     def _get_detector(self):
         if self._detector is None:

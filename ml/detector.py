@@ -86,10 +86,14 @@ class Detector:
         ``track_id`` may be None (e.g. very first frame or tracker warm-up);
         the event engine simply skips untracked detections.
         """
+        from pathlib import Path
+        custom_tracker = Path(__file__).resolve().parent / "bytetrack_custom.yaml"
+        tracker_cfg = str(custom_tracker) if custom_tracker.exists() else "bytetrack.yaml"
+
         results = self.model.track(
             frame_bgr,
             persist=True,
-            tracker="bytetrack.yaml",
+            tracker=tracker_cfg,
             conf=self.conf,
             iou=self.iou,
             imgsz=self.imgsz,

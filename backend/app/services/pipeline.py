@@ -27,9 +27,9 @@ logger = logging.getLogger("pipeline")
 PERSON_COLOR = (0, 200, 0)   # BGR green
 WASTE_COLOR = (0, 0, 255)    # BGR red
 
-# Codecs tried in order when writing .mp4 clips / previews. "avc1" (H.264)
-# plays in browsers; "mp4v" is the most widely supported OpenCV fallback.
-CODECS = ["avc1", "mp4v"]
+# Codecs tried in order when writing .mp4 clips / previews. "mp4v" is the
+# most widely supported OpenCV fallback on Windows; "avc1" is H.264.
+CODECS = ["mp4v", "avc1"]
 
 
 class Pipeline:
@@ -154,7 +154,7 @@ class Pipeline:
                         event["src_frame"] = src_frame
                         record = self._handle_event(
                             cap, frame, dets, video_id, src_frame, fps, width, height,
-                            event, len(incidents),
+                            event, len(incidents), engine=engine,
                         )
                         incidents.append(record)
                         stats["detected_incidents"] = len(incidents)
@@ -167,7 +167,7 @@ class Pipeline:
                     stats["processed_frames"] += 1
 
                     if preview_writer is not None:
-                        annotated = self._draw_detections(frame, dets)
+                        annotated = self._draw_detections(frame, dets, engine=engine)
                         preview_writer.write(annotated)
 
                     if detections_log is not None:
@@ -228,14 +228,14 @@ class Pipeline:
         return stats
 
     # ------------------------------------------------------------------
-    def _handle_event(self, cap, frame, dets, video_id, src_frame, fps, width, height, event, seq) -> dict:
+    def _handle_event(self, cap, frame, dets, video_id, src_frame, fps, width, height, event, seq, engine=None) -> dict:
         """Save the snapshot + evidence clip for one event. Returns the record."""
         base = self.cfg.storage_dir
         snapshot_rel = f"snapshots/{video_id}_{seq}.jpg"
         clip_rel = f"clips/{video_id}_{seq}.mp4"
 
         # Snapshot (with boxes drawn) -----------------------------------
-        annotated = self._draw_detections(frame, dets)
+        annotated = self._draw_detections(frame, dets, engine=engine)
         ok_snap = cv2.imwrite(str(base / snapshot_rel), annotated)
 
         # Evidence clip extracted from the source ------------------------
@@ -297,21 +297,64 @@ class Pipeline:
         return None
 
     # ------------------------------------------------------------------
-    def _draw_detections(self, frame, dets: List[dict]):
-        """Return a copy of the frame with bounding boxes + labels drawn."""
+    # ------------------------------------------------------------------
+    def _draw_detections(self, frame, dets: List[dict], engine=None):
+        """Return a copy of the frame with bounding boxes, labels, and top-right association HUD drawn."""
         out = frame.copy()
+        assoc_map = {}
+        active_assocs = []
+        if engine is not None and hasattr(engine, "get_active_associations"):
+            active_assocs = engine.get_active_associations()
+            assoc_map = dict(active_assocs)
+
+        # Draw bounding boxes
         for d in dets:
             x1, y1, x2, y2 = (int(v) for v in d["bbox"])
             is_person = d["class_id"] in self.detector.person_ids
             color = PERSON_COLOR if is_person else WASTE_COLOR
             cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
             label = f"{d['class_name']} {d['conf']:.2f}"
-            if d.get("track_id") is not None:
-                label += f" #{d['track_id']}"
+            tid = d.get("track_id")
+            if tid is not None:
+                label += f" #{tid}"
+                if not is_person and tid in assoc_map:
+                    label += f" (person #{assoc_map[tid]})"
             cv2.putText(
                 out, label, (x1, max(y1 - 6, 15)),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA,
             )
+
+        # Top-Right HUD Debugging Overlay for Associations: (Trash, Person)
+        hud_str = "Assoc (Trash, Person): "
+        if active_assocs:
+            hud_str += ", ".join(f"({w}, {p})" for w, p in active_assocs)
+        else:
+            hud_str += "None"
+
+        h, w = out.shape[:2]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        thickness = 1
+        (text_w, text_h), baseline = cv2.getTextSize(hud_str, font, font_scale, thickness)
+
+        margin = 10
+        box_x2 = w - margin
+        box_x1 = max(10, box_x2 - text_w - 16)
+        box_y1 = margin
+        box_y2 = box_y1 + text_h + 12
+
+        # Draw semi-transparent dark HUD box
+        overlay = out.copy()
+        cv2.rectangle(overlay, (box_x1, box_y1), (box_x2, box_y2), (20, 20, 20), -1)
+        cv2.rectangle(overlay, (box_x1, box_y1), (box_x2, box_y2), (0, 220, 255), 1)
+        cv2.addWeighted(overlay, 0.75, out, 0.25, 0, out)
+
+        # Draw HUD text in bright yellow / cyan
+        cv2.putText(
+            out, hud_str, (box_x1 + 8, box_y1 + text_h + 5),
+            font, font_scale, (0, 230, 255), thickness, cv2.LINE_AA,
+        )
+
         return out
 
     # ------------------------------------------------------------------

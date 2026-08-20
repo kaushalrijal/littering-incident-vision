@@ -1,5 +1,5 @@
 """
-Rule-based littering event engine.
+Rule-based littering event engine with Track Stitching & Flicker Recovery.
 
 Implements the event rule from the project proposal:
 
@@ -12,12 +12,14 @@ where
     S : the object remains **S**tationary afterwards,
     M : the person **M**oves away from the object.
 
-The engine is deliberately pure Python (no ML) so it can be unit-tested
-without any heavy dependencies. It consumes per-frame track updates and
-emits incident events with a confidence score.
+Features Track Stitching (Re-ID):
+If detection flickers or occlusion causes ByteTrack to reassign a track ID to a
+stationary waste object or a moving person, the engine stitches the new track to
+the recently lost track, preserving initial person association (N), initial birth location,
+and accumulated stationary frame count (S).
 
-Tuning parameters come from ``Settings`` (``backend/app/config.py``) and
-can be changed via ``.env`` (see ``.env.example``).
+The engine is deliberately pure Python (no ML) so it can be unit-tested
+without any heavy dependencies.
 """
 import math
 from collections import deque
@@ -33,6 +35,16 @@ def _dist(a: Point, b: Point) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+def _point_to_box_dist(point: Point, bbox: BBox) -> float:
+    """Calculate minimum Euclidean distance from a point (x, y) to a bounding box rectangle (x1, y1, x2, y2).
+    Returns 0.0 if the point is inside the bounding box."""
+    px, py = point
+    x1, y1, x2, y2 = bbox
+    dx = max(x1 - px, 0.0, px - x2)
+    dy = max(y1 - py, 0.0, py - y2)
+    return math.hypot(dx, dy)
+
+
 def _center(bbox: BBox) -> Point:
     return ((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)
 
@@ -42,6 +54,7 @@ class PersonState:
     track_id: int
     last_center: Point
     last_seen_frame: int
+    last_bbox: BBox = (0.0, 0.0, 0.0, 0.0)
     history: deque = field(default_factory=lambda: deque(maxlen=20))
 
 
@@ -73,16 +86,38 @@ class EventEngine:
 
         self.person_tracks: Dict[int, PersonState] = {}
         self.waste_tracks: Dict[int, WasteState] = {}
+
+        # Buffers for track stitching (reconnecting lost tracks after dropouts)
+        self.lost_waste_tracks: Dict[int, WasteState] = {}
+        self.lost_person_tracks: Dict[int, PersonState] = {}
+        self.person_alias_map: Dict[int, int] = {}
+
         self._events: List[dict] = []
         self._fired_count: int = 0
 
         # Pre-computed history size used by the stationary check.
         self._history_len = max(int(getattr(cfg, "stationary_frames", 12)) + 2, 4)
 
+    def get_active_associations(self) -> List[Tuple[int, int]]:
+        """Return list of (waste_track_id, active_person_track_id) for debugging UI overlay."""
+        assoc = []
+        for tid, state in self.waste_tracks.items():
+            if not state.skipped and state.associated_person is not None:
+                active_pid = state.associated_person
+                for p_tid in self.person_tracks:
+                    if self._resolve_person_id(p_tid) == self._resolve_person_id(state.associated_person):
+                        active_pid = p_tid
+                        break
+                assoc.append((tid, active_pid))
+        return assoc
+
     # ------------------------------------------------------------------
     def reset(self) -> None:
         self.person_tracks.clear()
         self.waste_tracks.clear()
+        self.lost_waste_tracks.clear()
+        self.lost_person_tracks.clear()
+        self.person_alias_map.clear()
         self._events.clear()
         self._fired_count = 0
 
@@ -94,24 +129,6 @@ class EventEngine:
         person_dets: List[dict],
         waste_dets: List[dict],
     ) -> List[dict]:
-        """
-        Advance the engine by one processed frame.
-
-        Args:
-            frame_idx:      sequential index of the *processed* frame
-                            (0, 1, 2, ... regardless of the video's frame step)
-            timestamp_ms:   playback time of this frame inside the video
-            person_dets:    detections with track_id for persons
-            waste_dets:     detections with track_id for waste objects
-
-        Returns:
-            A list of newly fired events (usually empty). Each event:
-            {
-                "frame_idx", "timestamp_ms", "confidence", "class_name",
-                "track_id", "reason",
-                "stationary_frames", "born_dist", "current_dist",
-            }
-        """
         new_events: List[dict] = []
 
         # --- Persons ----------------------------------------------------
@@ -121,16 +138,30 @@ class EventEngine:
             if tid is None:
                 continue
             seen_persons.add(tid)
-            center = _center(det["bbox"])
-            state = self.person_tracks.get(tid)
+            bbox = det["bbox"]
+            center = _center(bbox)
+
+            root_tid = self._resolve_person_id(tid)
+            state = self.person_tracks.get(root_tid) or self.person_tracks.get(tid)
+
             if state is None:
-                self.person_tracks[tid] = PersonState(
-                    track_id=tid, last_center=center, last_seen_frame=frame_idx
-                )
+                reconnected = self._try_reconnect_person(tid, center, frame_idx)
+                if reconnected is not None:
+                    state = reconnected
+                    state.last_bbox = bbox
+                    self.person_tracks[tid] = state
+                    self.person_tracks[state.track_id] = state
+                else:
+                    state = PersonState(
+                        track_id=tid, last_center=center, last_seen_frame=frame_idx, last_bbox=bbox
+                    )
+                    self.person_tracks[tid] = state
             else:
                 state.last_center = center
                 state.last_seen_frame = frame_idx
+                state.last_bbox = bbox
                 state.history.append(center)
+                self.person_tracks[tid] = state
 
         # --- Waste objects ----------------------------------------------
         seen_waste: set = set()
@@ -142,7 +173,7 @@ class EventEngine:
             center = _center(det["bbox"])
             state = self.waste_tracks.get(tid)
             if state is None:
-                state = self._create_waste(det, tid, center, frame_idx)
+                state = self._create_or_reconnect_waste(det, tid, center, frame_idx)
                 self.waste_tracks[tid] = state
             else:
                 state.last_center = center
@@ -151,18 +182,33 @@ class EventEngine:
                 state.frames += 1
                 state.mean_conf = (state.mean_conf * (state.frames - 1) + det["conf"]) / state.frames
 
-                # Stationary check: displacement from the smoothed position.
+                # If waste was born during ignore_first_frames but moved with a person (> 30px), un-skip carried trash!
+                if state.skipped and state.born_frame < self.cfg.ignore_first_frames:
+                    if _dist(center, state.born_center) > 30.0 and state.associated_person is not None:
+                        state.skipped = False
+
+                # Stationary check: displacement from the smoothed position or initial birth location.
                 if len(state.history) >= 2:
                     mean = self._mean_point(state.history)
                     disp = _dist(center, mean)
-                    if disp < self.cfg.stationary_threshold * 2.0:
+                    disp_born = _dist(center, state.born_center)
+                    if disp < self.cfg.stationary_threshold * 2.0 or disp_born < self.cfg.stationary_threshold * 3.0:
                         state.stationary_frames += 1
                     else:
-                        state.stationary_frames = 0
+                        state.stationary_frames = max(0, state.stationary_frames - 2)
+
+        # Move unseen active tracks into lost buffers
+        for pid, pstate in list(self.person_tracks.items()):
+            if pid not in seen_persons and frame_idx - pstate.last_seen_frame == 1:
+                self.lost_person_tracks[pid] = pstate
+
+        for wid, wstate in list(self.waste_tracks.items()):
+            if wid not in seen_waste and frame_idx - wstate.last_seen_frame == 1:
+                self.lost_waste_tracks[wid] = wstate
 
         # --- Association & firing --------------------------------------
-        for tid, state in self.waste_tracks.items():
-            if tid not in seen_waste:
+        for tid, state in list(self.waste_tracks.items()):
+            if frame_idx - state.last_seen_frame > 5:
                 continue
             if state.fired or state.skipped:
                 continue
@@ -175,11 +221,7 @@ class EventEngine:
             if self._fired_count >= self.cfg.max_incidents:
                 continue
 
-            person = self.person_tracks.get(state.associated_person)
-            if person is None:
-                # The person left the frame; if the departure was recent we can
-                # still use their last known position (they clearly moved away).
-                person = self._find_recent_person(state.associated_person, frame_idx)
+            person = self._find_recent_person(state.associated_person, frame_idx)
             if person is None:
                 continue
 
@@ -200,8 +242,40 @@ class EventEngine:
         return new_events
 
     # ------------------------------------------------------------------
-    # Internals
+    # Internals & Track Stitching
     # ------------------------------------------------------------------
+    def _create_or_reconnect_waste(self, det: dict, tid: int, center: Point, frame_idx: int) -> WasteState:
+        """Attempt to reconnect a new waste track to a recently lost waste track, or create new."""
+        reconnect_dist = getattr(self.cfg, "waste_reconnect_dist", 60.0)
+        reconnect_win = getattr(self.cfg, "waste_reconnect_window", 30)
+        c_name = det.get("class_name", "waste")
+
+        best_cand: Optional[WasteState] = None
+        best_cand_dist = float("inf")
+
+        for l_tid, l_state in list(self.lost_waste_tracks.items()):
+            if frame_idx - l_state.last_seen_frame > reconnect_win:
+                continue
+            if l_state.class_name != c_name:
+                continue
+            d = _dist(center, l_state.last_center)
+            if d <= reconnect_dist and d < best_cand_dist:
+                best_cand_dist = d
+                best_cand = l_state
+
+        if best_cand is not None:
+            best_cand.last_center = center
+            best_cand.last_seen_frame = frame_idx
+            best_cand.history.append(center)
+            best_cand.frames += 1
+            best_cand.mean_conf = (best_cand.mean_conf * (best_cand.frames - 1) + det["conf"]) / best_cand.frames
+            best_cand.stationary_frames += 1
+
+            self.lost_waste_tracks.pop(best_cand.track_id, None)
+            return best_cand
+
+        return self._create_waste(det, tid, center, frame_idx)
+
     def _create_waste(self, det: dict, tid: int, center: Point, frame_idx: int) -> WasteState:
         x1, y1, x2, y2 = det["bbox"]
         area = max((x2 - x1), 0.0) * max((y2 - y1), 0.0)
@@ -217,9 +291,9 @@ class EventEngine:
             mean_conf=det["conf"],
         )
 
-        # Objects that are tiny, touch the frame edge, or are already present
-        # at the start of the video are treated as pre-existing litter /
-        # detector artifacts and can never become events.
+        # Attempt association first
+        self._try_associate(state, frame_idx)
+
         if area < self.cfg.min_object_area:
             state.skipped = True
         elif (
@@ -228,30 +302,76 @@ class EventEngine:
             or x2 > self.frame_width - self.cfg.edge_margin
             or y2 > self.frame_height - self.cfg.edge_margin
         ):
-            state.skipped = True
+            # Only skip edge objects if NOT associated with a person entering the video
+            if state.associated_person is None:
+                state.skipped = True
         elif frame_idx < self.cfg.ignore_first_frames:
+            # Pre-existing litter present at video start: skip by default unless it moves with person (>30px)
             state.skipped = True
 
-        self._try_associate(state, frame_idx)
         return state
 
+    def _try_reconnect_person(self, tid: int, center: Point, frame_idx: int) -> Optional[PersonState]:
+        """Attempt to reconnect a lost person track to a new person track ID."""
+        reconnect_dist = getattr(self.cfg, "person_reconnect_dist", 80.0)
+        reconnect_win = getattr(self.cfg, "person_reconnect_window", 30)
+
+        best_cand: Optional[PersonState] = None
+        best_cand_dist = float("inf")
+
+        for l_pid, l_state in list(self.lost_person_tracks.items()):
+            if frame_idx - l_state.last_seen_frame > reconnect_win:
+                continue
+            d = _dist(center, l_state.last_center)
+            if d <= reconnect_dist and d < best_cand_dist:
+                best_cand_dist = d
+                best_cand = l_state
+
+        if best_cand is not None:
+            self.person_alias_map[tid] = best_cand.track_id
+            best_cand.last_center = center
+            best_cand.last_seen_frame = frame_idx
+            best_cand.history.append(center)
+            self.lost_person_tracks.pop(best_cand.track_id, None)
+            return best_cand
+
+        return None
+
+    def _resolve_person_id(self, pid: int) -> int:
+        """Resolve alias mapping for person IDs."""
+        visited = set()
+        curr = pid
+        while curr in self.person_alias_map and curr not in visited:
+            visited.add(curr)
+            curr = self.person_alias_map[curr]
+        return curr
+
     def _try_associate(self, state: WasteState, frame_idx: int) -> None:
-        """N: associate the waste object with the nearest nearby person."""
+        """N: associate the waste object with the nearest nearby person using box-aware proximity."""
         best_person: Optional[int] = None
         best_dist = float("inf")
         for pid, person in self.person_tracks.items():
             if frame_idx - person.last_seen_frame > self.cfg.person_near_window:
                 continue
-            d = _dist(person.last_center, state.last_center)
+            
+            # Point-to-Box distance (distance from trash center to person bounding box rectangle)
+            if hasattr(person, "last_bbox") and person.last_bbox and person.last_bbox != (0.0, 0.0, 0.0, 0.0):
+                d = _point_to_box_dist(state.last_center, person.last_bbox)
+            else:
+                d = _dist(person.last_center, state.last_center)
+
             if d < self.cfg.proximity_radius and d < best_dist:
                 best_dist = d
-                best_person = pid
+                best_person = self._resolve_person_id(pid)
         if best_person is not None:
             state.associated_person = best_person
             state.born_dist = best_dist
 
     def _find_recent_person(self, person_id: int, frame_idx: int) -> Optional[PersonState]:
-        person = self.person_tracks.get(person_id)
+        root_id = self._resolve_person_id(person_id)
+        person = self.person_tracks.get(root_id) or self.person_tracks.get(person_id)
+        if person is None:
+            person = self.lost_person_tracks.get(root_id) or self.lost_person_tracks.get(person_id)
         if person is None:
             return None
         if frame_idx - person.last_seen_frame > self.cfg.person_expire:
@@ -290,6 +410,9 @@ class EventEngine:
         }
 
     def _expire(self, frame_idx: int) -> None:
+        reconnect_win_p = getattr(self.cfg, "person_reconnect_window", 30)
+        reconnect_win_w = getattr(self.cfg, "waste_reconnect_window", 30)
+
         self.person_tracks = {
             pid: p
             for pid, p in self.person_tracks.items()
@@ -299,6 +422,16 @@ class EventEngine:
             tid: t
             for tid, t in self.waste_tracks.items()
             if frame_idx - t.last_seen_frame <= self.cfg.waste_expire
+        }
+        self.lost_person_tracks = {
+            pid: p
+            for pid, p in self.lost_person_tracks.items()
+            if frame_idx - p.last_seen_frame <= reconnect_win_p
+        }
+        self.lost_waste_tracks = {
+            tid: t
+            for tid, t in self.lost_waste_tracks.items()
+            if frame_idx - t.last_seen_frame <= reconnect_win_w
         }
 
     @staticmethod

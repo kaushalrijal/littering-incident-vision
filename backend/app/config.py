@@ -79,19 +79,26 @@ class Settings:
         self.max_video_duration_s: int = _env_int("MAX_VIDEO_DURATION_S", 0)
 
         # --- Event rule engine (N ^ R ^ S ^ M) ----------------------------
-        self.proximity_radius: float = _env_float("PROXIMITY_RADIUS", 150.0)
+        self.proximity_radius: float = _env_float("PROXIMITY_RADIUS", 180.0)
         self.stationary_threshold: float = _env_float("STATIONARY_THRESHOLD", 8.0)
-        self.stationary_frames: int = _env_int("STATIONARY_FRAMES", 12)
-        self.leave_distance: float = _env_float("LEAVE_DISTANCE", 120.0)
+        self.stationary_frames: int = _env_int("STATIONARY_FRAMES", 8)
+        self.leave_distance: float = _env_float("LEAVE_DISTANCE", 100.0)
         self.min_track_frames: int = _env_int("MIN_TRACK_FRAMES", 5)
-        self.min_object_area: float = _env_float("MIN_OBJECT_AREA", 400.0)
-        self.edge_margin: float = _env_float("EDGE_MARGIN", 40.0)
+        self.min_object_area: float = _env_float("MIN_OBJECT_AREA", 150.0)
+        self.edge_margin: float = _env_float("EDGE_MARGIN", 20.0)
         self.ignore_first_frames: int = _env_int("IGNORE_FIRST_FRAMES", 20)
 
         # Internal engine windows (frames). Not exposed in .env.example.
         self.person_near_window: int = _env_int("PERSON_NEAR_WINDOW", 15)
         self.person_expire: int = _env_int("PERSON_EXPIRE", 60)
         self.waste_expire: int = _env_int("WASTE_EXPIRE", 60)
+
+        # --- Track Stitching & Tracker Recovery ---------------------------
+        self.waste_reconnect_dist: float = _env_float("WASTE_RECONNECT_DIST", 60.0)
+        self.waste_reconnect_window: int = _env_int("WASTE_RECONNECT_WINDOW", 30)
+        self.person_reconnect_dist: float = _env_float("PERSON_RECONNECT_DIST", 80.0)
+        self.person_reconnect_window: int = _env_int("PERSON_RECONNECT_WINDOW", 30)
+        self.track_buffer: int = _env_int("TRACK_BUFFER", 60)
 
         # --- Evidence clips ----------------------------------------------
         self.clip_before_ms: int = _env_int("CLIP_BEFORE_MS", 2000)

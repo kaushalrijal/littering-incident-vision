@@ -1,0 +1,11 @@
+.venv
+__pycache__
+*.pt
+random shits
+.env
+test.py
+merge_class_2_to_1.py
+dataset
+*.mp4
+*.mov
+backend/storage/snapshots/**/*.jpg

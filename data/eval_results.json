@@ -1,0 +1,11 @@
+[
+  {
+    "file": "sample_synthetic.mp4",
+    "duration_ms": 6000,
+    "frames_processed": 90,
+    "processing_s": 12.21,
+    "processing_fps": 7.38,
+    "incident_count": 0,
+    "incidents": []
+  }
+]

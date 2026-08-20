@@ -169,3 +169,127 @@ def test_reset_clears_state():
     assert engine.person_tracks == {}
     assert engine.waste_tracks == {}
     assert engine._events == []
+
+
+def test_waste_track_reconnection_after_detection_dropout():
+    """If waste detection drops for a few frames and gets assigned a new track ID after person walks away, track stitching reconnects it and fires event."""
+    engine = make_engine()
+
+    def persons(idx):
+        if idx < 25:
+            x = 100 + min(idx, 20) * 12  # person moves away from 100 to 340
+            return [person(1, x, 90, x + 30, 120)]
+        return []
+
+    def wastes(idx):
+        if 5 <= idx < 10:
+            return [waste(50, 110, 100, 140, 130)]  # original waste track ID 50
+        elif idx >= 15:
+            return [waste(99, 112, 101, 142, 131)]  # reappears with NEW track ID 99 after 5 missing frames!
+        return []
+
+    events = run_frames(engine, 40, persons, wastes)
+
+    assert len(events) == 1, f"expected 1 reconnected event, got {len(events)}"
+    ev = events[0]
+    assert ev["track_id"] == 50  # preserved original track ID from reconnection
+    assert ev["class_name"] == "bottle"
+
+
+def test_person_track_reconnection_after_person_id_change():
+    """If person track changes ID mid-sequence (e.g. from 1 to 77), person alias mapping links them so distance calculation M succeeds."""
+    engine = make_engine()
+
+    def persons(idx):
+        if idx < 10:
+            return [person(1, 100, 90, 130, 120)]
+        elif idx >= 12:
+            x = 100 + (idx - 10) * 15  # person reappears as ID 77 and moves away
+            return [person(77, x, 90, x + 30, 120)]
+        return []
+
+    def wastes(idx):
+        if idx >= 5:
+            return [waste(50, 110, 100, 140, 130)]
+        return []
+
+    events = run_frames(engine, 40, persons, wastes)
+
+    assert len(events) == 1, f"expected 1 event with person alias mapping, got {len(events)}"
+    assert events[0]["track_id"] == 50
+
+
+def test_off_camera_person_departure():
+    """If person drops litter, moves away, and leaves the frame, the engine still fires the event using the person's last known location."""
+    engine = make_engine()
+
+    def persons(idx):
+        if idx < 15:
+            x = 100 + idx * 20  # person moves from 100 to 400 (far away > 80px) and disappears
+            return [person(1, x, 90, x + 30, 120)]
+        return []  # person leaves camera view after frame 15
+
+    def wastes(idx):
+        if idx >= 5:
+            return [waste(50, 110, 100, 140, 130)]  # stays still
+        return []
+
+    events = run_frames(engine, 30, persons, wastes)
+
+    assert len(events) == 1, f"expected 1 event for off-camera person departure, got {len(events)}"
+    assert events[0]["track_id"] == 50
+
+
+def test_get_active_associations():
+    """Verify that get_active_associations returns [(waste_id, person_id)] for debugging UI HUD rendering."""
+    engine = make_engine()
+    engine.process_frame(6, 200, [person(10, 100, 90, 130, 120)], [])
+    engine.process_frame(7, 233, [person(10, 100, 90, 130, 120)], [waste(12, 110, 100, 140, 130)])
+
+    assocs = engine.get_active_associations()
+    assert assocs == [(12, 10)], f"expected [(12, 10)], got {assocs}"
+
+
+def test_box_aware_hand_held_trash_association():
+    """Trash held in hand near person box edge (large center-to-center distance) associates successfully via point-to-box distance."""
+    engine = make_engine()
+    # Person box: (100, 50, 200, 350) -> torso center (150, 200)
+    # Trash box: (210, 280, 240, 310) -> trash center (225, 295)
+    # Center-to-center dist: sqrt((225-150)^2 + (295-200)^2) = sqrt(75^2 + 95^2) = 121.0px
+    # Point-to-box dist: dx = 225 - 200 = 25px, dy = 0px -> 25px!
+    engine.process_frame(6, 200, [person(10, 100, 50, 200, 350)], [waste(12, 210, 280, 240, 310)])
+
+    assocs = engine.get_active_associations()
+    assert assocs == [(12, 10)], f"expected [(12, 10)], got {assocs}"
+
+
+def test_carried_trash_entrance_not_skipped():
+    """Carried trash entering at frame index 1 (< ignore_first_frames) near a person moves with person, un-skips, and fires when dropped."""
+    engine = make_engine()
+
+    def persons(idx):
+        if idx < 25:
+            x = 100 + idx * 15  # person enters at 100 and walks to 475
+            return [person(1, x, 90, x + 30, 120)]
+        return []
+
+    def wastes(idx):
+        if 1 <= idx < 10:
+            x = 110 + (idx - 1) * 15  # trash moves in hand with person from 110 to 245
+            return [waste(50, x, 100, x + 30, 130)]
+        elif idx >= 10:
+            return [waste(50, 245, 100, 275, 130)]  # person drops trash at 245 and continues walking to 475!
+        return []
+
+def test_edge_entrance_carried_trash_association():
+    """Trash born near the frame edge (x1 < edge_margin) carried by a person entering the screen associates successfully and is NOT skipped."""
+    engine = make_engine()  # edge_margin = 20.0, ignore_first_frames = 5
+    # Person box: (5, 90, 60, 300) -> entering from left edge (x1 = 5)
+    # Trash box: (10, 200, 40, 230) -> trash inside lower portion of person box (x1 = 10 < edge_margin 20)
+    engine.process_frame(6, 200, [person(12, 5, 90, 60, 300)], [waste(13, 10, 200, 40, 230)])
+
+    assocs = engine.get_active_associations()
+    assert assocs == [(13, 12)], f"expected [(13, 12)], got {assocs}"
+
+
+

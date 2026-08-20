@@ -1,14 +1,4 @@
 import React from 'react';
-import { Shield, Leaf } from 'lucide-react';
-
-function BrandMark() {
-  return (
-    <div className="relative w-8 h-8 rounded-lg bg-[#1F4D3A] flex items-center justify-center text-white shrink-0">
-      <Shield className="w-[18px] h-[18px]" strokeWidth={1.75} />
-      <Leaf className="absolute bottom-1 right-1 w-2.5 h-2.5 text-[#EAF2EC]" strokeWidth={2.5} />
-    </div>
-  );
-}
 
 export default function Sidebar({
   activeTab,
@@ -63,18 +53,6 @@ export default function Sidebar({
       }`}
     >
       <div>
-        <div className="h-[68px] flex items-center gap-2.5 px-4 border-b border-[#E2E7E2]">
-          <BrandMark />
-          <div className="min-w-0">
-            <h1 className="font-semibold text-[14px] text-[#26312B] leading-tight truncate">
-              LitterGuard AI
-            </h1>
-            <p className="text-[11px] text-[#8A948D] leading-tight mt-0.5 truncate">
-              Real-Time Detection
-            </p>
-          </div>
-        </div>
-
         <nav className="px-3 py-4 space-y-5">
           <div>
             <p className="px-3 mb-1.5 text-[10px] font-semibold tracking-wide text-[#8A948D] uppercase">

@@ -19,10 +19,9 @@ function StatusDot({ status }) {
   );
 }
 
-function StatCard({ icon: Icon, label, value, hint, accent }) {
+function StatCard({ icon: Icon, label, value, hint }) {
   return (
-    <div className="lg-card p-4 relative overflow-hidden">
-      <div className={`absolute left-0 top-0 bottom-0 w-[3px] ${accent}`} />
+    <div className="lg-card p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[12px] text-[#647067] font-medium">{label}</p>
@@ -68,36 +67,33 @@ export default function VideosTab({ videos, incidents = [], onReprocess, liveSta
           label="Videos"
           value={videos.length}
           hint="uploaded"
-          accent="bg-[#3E7C59]"
         />
         <StatCard
           icon={Loader2}
           label="Processing"
           value={processingCount}
           hint="active"
-          accent="bg-[#4D7185]"
         />
         <StatCard
           icon={AlertTriangle}
           label="Incidents"
           value={incidentCount}
           hint="detected"
-          accent="bg-[#C58B2A]"
         />
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-x-4 gap-y-1.5">
         {[
-          { label: 'Processing', value: processingCount, color: 'text-[#4D7185] bg-[#EEF1EC]' },
-          { label: 'Completed', value: completedCount, color: 'text-[#3E7C59] bg-[#EAF2EC]' },
-          { label: 'Incidents', value: incidentCount, color: 'text-[#C58B2A] bg-[#FBF6EB]' },
+          { label: 'Processing', value: processingCount, color: 'text-[#4D7185]' },
+          { label: 'Completed', value: completedCount, color: 'text-[#3E7C59]' },
+          { label: 'Incidents', value: incidentCount, color: 'text-[#C58B2A]' },
         ].map((chip) => (
           <span
             key={chip.label}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-medium ${chip.color}`}
+            className={`inline-flex items-center gap-1.5 text-[13px] ${chip.color}`}
           >
             {chip.label}
-            <span className="font-semibold">{chip.value}</span>
+            <span>{chip.value}</span>
           </span>
         ))}
       </div>

@@ -14,6 +14,9 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const wsRef = useRef(null);
 
+  // Date range filter (default 3 days)
+  const [days, setDays] = useState(3);
+
   // Videos pagination
   const [videos, setVideos] = useState([]);
   const [videosTotal, setVideosTotal] = useState(0);
@@ -26,17 +29,25 @@ export default function App() {
   const [incidentPage, setIncidentPage] = useState(1);
   const [incidentFilter, setIncidentFilter] = useState('all');
 
+  // Dashboard stats for % change
+  const [dashboardStats, setDashboardStats] = useState(null);
+
   const videoPageRef = useRef(videoPage);
   const incidentPageRef = useRef(incidentPage);
   const incidentFilterRef = useRef(incidentFilter);
+  const daysRef = useRef(days);
 
   useEffect(() => { videoPageRef.current = videoPage; }, [videoPage]);
   useEffect(() => { incidentPageRef.current = incidentPage; }, [incidentPage]);
   useEffect(() => { incidentFilterRef.current = incidentFilter; }, [incidentFilter]);
+  useEffect(() => { daysRef.current = days; }, [days]);
 
-  const fetchVideos = useCallback(async (page = 1) => {
+  const fetchVideos = useCallback(async (page = 1, daysParam) => {
     try {
-      const res = await fetch(`/api/videos?page=${page}&page_size=${PAGE_SIZE}`);
+      const d = daysParam !== undefined ? daysParam : daysRef.current;
+      let url = `/api/videos?page=${page}&page_size=${PAGE_SIZE}`;
+      if (d) url += `&days=${d}`;
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
         setVideos(data.items);
@@ -47,10 +58,12 @@ export default function App() {
     }
   }, []);
 
-  const fetchIncidents = useCallback(async (page = 1, status) => {
+  const fetchIncidents = useCallback(async (page = 1, status, daysParam) => {
     try {
+      const d = daysParam !== undefined ? daysParam : daysRef.current;
       let url = `/api/incidents?page=${page}&page_size=${PAGE_SIZE}`;
       if (status && status !== 'all') url += `&status=${status}`;
+      if (d) url += `&days=${d}`;
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
@@ -74,10 +87,24 @@ export default function App() {
     }
   }, []);
 
+  const fetchDashboardStats = useCallback(async (daysParam) => {
+    try {
+      const d = daysParam !== undefined ? daysParam : daysRef.current;
+      const res = await fetch(`/api/dashboard/stats?days=${d}`);
+      if (res.ok) {
+        const data = await res.json();
+        setDashboardStats(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch dashboard stats:', err);
+    }
+  }, []);
+
   useEffect(() => {
-    fetchVideos(1);
-    fetchIncidents(1, 'all');
+    fetchVideos(1, days);
+    fetchIncidents(1, 'all', days);
     fetchPendingIncidentsCount();
+    fetchDashboardStats(days);
     setupWebSocket();
 
     return () => {
@@ -105,9 +132,10 @@ export default function App() {
             [message.video_id]: message.stats,
           }));
         } else if (message.type === 'video_status') {
-          fetchVideos(videoPageRef.current);
-          fetchIncidents(incidentPageRef.current, incidentFilterRef.current);
+          fetchVideos(videoPageRef.current, daysRef.current);
+          fetchIncidents(incidentPageRef.current, incidentFilterRef.current, daysRef.current);
           fetchPendingIncidentsCount();
+          fetchDashboardStats(daysRef.current);
         }
       } catch (err) {
         console.error('Error parsing WebSocket message:', err);
@@ -123,7 +151,7 @@ export default function App() {
   };
 
   const handleUploadSuccess = () => {
-    fetchVideos(1);
+    fetchVideos(1, days);
     setVideoPage(1);
     setActiveTab('videos');
   };
@@ -136,10 +164,11 @@ export default function App() {
         body: JSON.stringify({ force: true }),
       });
       if (res.ok) {
-        fetchVideos(videoPage);
-        fetchIncidents(1, incidentFilter);
+        fetchVideos(videoPage, days);
+        fetchIncidents(1, incidentFilter, days);
         setIncidentPage(1);
         fetchPendingIncidentsCount();
+        fetchDashboardStats(days);
       }
     } catch (err) {
       console.error('Failed to reprocess video:', err);
@@ -165,20 +194,29 @@ export default function App() {
     }
   };
 
+  const handleDaysChange = (newDays) => {
+    setDays(newDays);
+    setVideoPage(1);
+    setIncidentPage(1);
+    fetchVideos(1, newDays);
+    fetchIncidents(1, incidentFilter, newDays);
+    fetchDashboardStats(newDays);
+  };
+
   const handleVideoPageChange = (page) => {
     setVideoPage(page);
-    fetchVideos(page);
+    fetchVideos(page, days);
   };
 
   const handleIncidentPageChange = (page) => {
     setIncidentPage(page);
-    fetchIncidents(page, incidentFilter);
+    fetchIncidents(page, incidentFilter, days);
   };
 
   const handleIncidentFilterChange = (filter) => {
     setIncidentFilter(filter);
     setIncidentPage(1);
-    fetchIncidents(1, filter);
+    fetchIncidents(1, filter, days);
   };
 
   const activeProcessingCount = videos.filter((v) => v.status === 'processing').length;
@@ -230,6 +268,9 @@ export default function App() {
               incidentsTotal={incidentsTotal}
               currentPage={videoPage}
               totalPages={Math.max(1, Math.ceil(videosTotal / PAGE_SIZE))}
+              days={days}
+              dashboardStats={dashboardStats}
+              onDaysChange={handleDaysChange}
               onPageChange={handleVideoPageChange}
               onReprocess={handleReprocess}
               liveStats={liveStats}

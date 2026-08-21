@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Film, Loader2, AlertTriangle, Camera } from 'lucide-react';
+import { Film, Loader2, AlertTriangle, Camera, ChevronDown, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import Pagination from './Pagination';
 
 function StatusDot({ status }) {
@@ -20,14 +20,36 @@ function StatusDot({ status }) {
   );
 }
 
-function StatCard({ icon: Icon, label, value, hint }) {
+function StatCard({ icon: Icon, label, value, hint, changePct }) {
   return (
     <div className="lg-card p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[12px] text-[#647067] font-medium">{label}</p>
           <p className="text-[24px] font-semibold text-[#26312B] mt-1 leading-none">{value}</p>
-          <p className="text-[12px] text-[#8A948D] mt-1.5">{hint}</p>
+          <div className="flex items-center gap-1.5 mt-1.5">
+            <p className="text-[12px] text-[#8A948D]">{hint}</p>
+            {changePct !== null && changePct !== undefined && (
+              <span
+                className={`inline-flex items-center gap-0.5 text-[11px] font-medium px-1.5 py-0.5 rounded-md ${
+                  changePct > 0
+                    ? 'bg-[#EAF2EC] text-[#3E7C59]'
+                    : changePct < 0
+                    ? 'bg-[#FBECEC] text-[#C94A4A]'
+                    : 'bg-[#EEF1EC] text-[#8A948D]'
+                }`}
+              >
+                {changePct > 0 ? (
+                  <TrendingUp className="w-3 h-3" />
+                ) : changePct < 0 ? (
+                  <TrendingDown className="w-3 h-3" />
+                ) : (
+                  <Minus className="w-3 h-3" />
+                )}
+                {changePct > 0 ? '+' : ''}{changePct}%
+              </span>
+            )}
+          </div>
         </div>
         <div className="w-8 h-8 rounded-lg bg-[#EAF2EC] flex items-center justify-center text-[#1F4D3A]">
           <Icon className="w-4 h-4" strokeWidth={1.75} />
@@ -37,12 +59,23 @@ function StatCard({ icon: Icon, label, value, hint }) {
   );
 }
 
+const DATE_OPTIONS = [
+  { value: 1, label: '1 Day' },
+  { value: 3, label: '3 Days' },
+  { value: 7, label: '7 Days' },
+  { value: 15, label: '15 Days' },
+  { value: 30, label: '30 Days' },
+];
+
 export default function VideosTab({
   videos,
   videosTotal = 0,
   incidentsTotal = 0,
   currentPage = 1,
   totalPages = 1,
+  days = 3,
+  dashboardStats,
+  onDaysChange,
   onPageChange,
   onReprocess,
   liveStats,
@@ -53,6 +86,9 @@ export default function VideosTab({
   const processingCount = videos.filter((v) => v.status === 'processing').length;
   const completedCount = videos.filter((v) => v.status === 'completed').length;
 
+  const videoChangePct = dashboardStats?.videos?.change_pct ?? null;
+  const incidentChangePct = dashboardStats?.incidents?.change_pct ?? null;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
@@ -62,13 +98,29 @@ export default function VideosTab({
             Monitor uploaded footage, processing progress and detected events.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onGoUpload}
-          className="inline-flex items-center self-start px-3.5 py-2 rounded-lg bg-[#1F4D3A] hover:bg-[#183D2E] text-white text-[13px] font-medium transition-colors duration-150"
-        >
-          + Upload Video
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <select
+              value={days}
+              onChange={(e) => onDaysChange(Number(e.target.value))}
+              className="appearance-none pl-3 pr-8 py-2 rounded-lg border border-[#E2E7E2] bg-white text-[13px] text-[#26312B] font-medium hover:border-[#3E7C59] focus:outline-none focus:ring-2 focus:ring-[#3E7C59]/30 focus:border-[#3E7C59] transition-colors duration-150 cursor-pointer"
+            >
+              {DATE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  Last {opt.label}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#647067] pointer-events-none" />
+          </div>
+          <button
+            type="button"
+            onClick={onGoUpload}
+            className="inline-flex items-center px-3.5 py-2 rounded-lg bg-[#1F4D3A] hover:bg-[#183D2E] text-white text-[13px] font-medium transition-colors duration-150"
+          >
+            + Upload Video
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -77,6 +129,7 @@ export default function VideosTab({
           label="Videos"
           value={videosTotal}
           hint="uploaded"
+          changePct={videoChangePct}
         />
         <StatCard
           icon={Loader2}
@@ -89,6 +142,7 @@ export default function VideosTab({
           label="Incidents"
           value={incidentsTotal}
           hint="detected"
+          changePct={incidentChangePct}
         />
       </div>
 

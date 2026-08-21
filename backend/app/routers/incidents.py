@@ -9,7 +9,7 @@ from backend.app.schemas import IncidentUpdate, PaginatedResponse
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
 
-@router.get("", response_model=PaginatedResponse)
+@router.get("")
 def list_incidents(
     video_id: int | None = Query(default=None, description="Filter by video id"),
     status: str | None = Query(default=None, description="Filter by review status"),

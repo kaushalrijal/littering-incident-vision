@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.app import db
 from backend.app.config import settings
-from backend.app.routers import incidents, videos, webcam
+from backend.app.routers import incidents, videos, webcam, review
 from backend.app.services.websocket_manager import ws_manager
 from backend.app.services.worker import worker
 
@@ -109,6 +109,7 @@ async def websocket_events(websocket: WebSocket):
 # API routes must be registered before the static mounts so /api/* wins.
 app.include_router(videos.router, prefix="/api")
 app.include_router(incidents.router, prefix="/api")
+app.include_router(review.router, prefix="/api")
 app.include_router(webcam.router)
 
 # Stored media (uploaded videos, snapshots, evidence clips).

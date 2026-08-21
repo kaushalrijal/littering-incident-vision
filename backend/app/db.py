@@ -296,6 +296,107 @@ def set_incident_status(incident_id: int, review_status: str) -> Optional[dict]:
     return get_incident(incident_id)
 
 
+def list_video_incident_summaries(
+    status_filter: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    min_incidents: int = 0,
+    days: Optional[int] = None,
+) -> list:
+    """Return videos with incident count breakdowns for the review dashboard."""
+    sql = """
+        SELECT
+            v.id,
+            v.filename,
+            v.status AS video_status,
+            v.created_at,
+            COUNT(i.id) AS total_incidents,
+            SUM(CASE WHEN i.review_status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+            SUM(CASE WHEN i.review_status = 'confirmed' THEN 1 ELSE 0 END) AS confirmed_count,
+            SUM(CASE WHEN i.review_status = 'false_alarm' THEN 1 ELSE 0 END) AS false_alarm_count
+        FROM videos v
+        LEFT JOIN incidents i ON i.video_id = v.id
+    """
+    having_clauses, params = [], []
+
+    if status_filter and status_filter != "all":
+        if status_filter == "pending":
+            having_clauses.append("SUM(CASE WHEN i.review_status = 'pending' THEN 1 ELSE 0 END) > 0")
+        elif status_filter == "confirmed":
+            having_clauses.append("SUM(CASE WHEN i.review_status = 'confirmed' THEN 1 ELSE 0 END) > 0")
+        elif status_filter == "false_alarm":
+            having_clauses.append("SUM(CASE WHEN i.review_status = 'false_alarm' THEN 1 ELSE 0 END) > 0")
+        elif status_filter == "has_incidents":
+            having_clauses.append("COUNT(i.id) > 0")
+
+    if min_incidents > 0:
+        having_clauses.append(f"COUNT(i.id) >= {min_incidents}")
+
+    where_parts = []
+    if search:
+        where_parts.append("v.filename LIKE ?")
+        params.append(f"%{search}%")
+    if days:
+        where_parts.append("v.created_at >= ?")
+        params.append(_days_ago(days))
+
+    if where_parts:
+        sql += " WHERE " + " AND ".join(where_parts)
+
+    sql += " GROUP BY v.id"
+
+    if having_clauses:
+        sql += " HAVING " + " AND ".join(having_clauses)
+
+    sql += " ORDER BY v.id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
+    return query(sql, params)
+
+
+def count_video_incident_summaries(
+    status_filter: Optional[str] = None,
+    search: Optional[str] = None,
+    min_incidents: int = 0,
+    days: Optional[int] = None,
+) -> int:
+    sql = "SELECT COUNT(*) FROM (SELECT v.id FROM videos v LEFT JOIN incidents i ON i.video_id = v.id"
+    having_clauses, params = [], []
+
+    if status_filter and status_filter != "all":
+        if status_filter == "pending":
+            having_clauses.append("SUM(CASE WHEN i.review_status = 'pending' THEN 1 ELSE 0 END) > 0")
+        elif status_filter == "confirmed":
+            having_clauses.append("SUM(CASE WHEN i.review_status = 'confirmed' THEN 1 ELSE 0 END) > 0")
+        elif status_filter == "false_alarm":
+            having_clauses.append("SUM(CASE WHEN i.review_status = 'false_alarm' THEN 1 ELSE 0 END) > 0")
+        elif status_filter == "has_incidents":
+            having_clauses.append("COUNT(i.id) > 0")
+
+    if min_incidents > 0:
+        having_clauses.append(f"COUNT(i.id) >= {min_incidents}")
+
+    where_parts = []
+    if search:
+        where_parts.append("v.filename LIKE ?")
+        params.append(f"%{search}%")
+    if days:
+        where_parts.append("v.created_at >= ?")
+        params.append(_days_ago(days))
+
+    if where_parts:
+        sql += " WHERE " + " AND ".join(where_parts)
+
+    sql += " GROUP BY v.id"
+
+    if having_clauses:
+        sql += " HAVING " + " AND ".join(having_clauses)
+
+    sql += ")"
+    return query_scalar(sql, params) or 0
+
+
 def _now() -> str:
     from .utils import now_str
 

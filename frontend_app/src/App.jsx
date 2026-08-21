@@ -22,24 +22,16 @@ export default function App() {
   const [videosTotal, setVideosTotal] = useState(0);
   const [videoPage, setVideoPage] = useState(1);
 
-  // Incidents pagination + server-side filter
-  const [incidents, setIncidents] = useState([]);
-  const [incidentsTotal, setIncidentsTotal] = useState(0);
+  // Pending incidents count for badge
   const [pendingIncidentsTotal, setPendingIncidentsTotal] = useState(0);
-  const [incidentPage, setIncidentPage] = useState(1);
-  const [incidentFilter, setIncidentFilter] = useState('all');
 
   // Dashboard stats for % change
   const [dashboardStats, setDashboardStats] = useState(null);
 
   const videoPageRef = useRef(videoPage);
-  const incidentPageRef = useRef(incidentPage);
-  const incidentFilterRef = useRef(incidentFilter);
   const daysRef = useRef(days);
 
   useEffect(() => { videoPageRef.current = videoPage; }, [videoPage]);
-  useEffect(() => { incidentPageRef.current = incidentPage; }, [incidentPage]);
-  useEffect(() => { incidentFilterRef.current = incidentFilter; }, [incidentFilter]);
   useEffect(() => { daysRef.current = days; }, [days]);
 
   const fetchVideos = useCallback(async (page = 1, daysParam) => {
@@ -55,23 +47,6 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to fetch videos:', err);
-    }
-  }, []);
-
-  const fetchIncidents = useCallback(async (page = 1, status, daysParam) => {
-    try {
-      const d = daysParam !== undefined ? daysParam : daysRef.current;
-      let url = `/api/incidents?page=${page}&page_size=${PAGE_SIZE}`;
-      if (status && status !== 'all') url += `&status=${status}`;
-      if (d) url += `&days=${d}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        setIncidents(data.items);
-        setIncidentsTotal(data.total);
-      }
-    } catch (err) {
-      console.error('Failed to fetch incidents:', err);
     }
   }, []);
 
@@ -102,7 +77,6 @@ export default function App() {
 
   useEffect(() => {
     fetchVideos(1, days);
-    fetchIncidents(1, 'all', days);
     fetchPendingIncidentsCount();
     fetchDashboardStats(days);
     setupWebSocket();
@@ -133,7 +107,6 @@ export default function App() {
           }));
         } else if (message.type === 'video_status') {
           fetchVideos(videoPageRef.current, daysRef.current);
-          fetchIncidents(incidentPageRef.current, incidentFilterRef.current, daysRef.current);
           fetchPendingIncidentsCount();
           fetchDashboardStats(daysRef.current);
         }
@@ -165,8 +138,6 @@ export default function App() {
       });
       if (res.ok) {
         fetchVideos(videoPage, days);
-        fetchIncidents(1, incidentFilter, days);
-        setIncidentPage(1);
         fetchPendingIncidentsCount();
         fetchDashboardStats(days);
       }
@@ -183,11 +154,8 @@ export default function App() {
         body: JSON.stringify({ review_status: reviewStatus }),
       });
       if (res.ok) {
-        const updated = await res.json();
-        setIncidents((prev) =>
-          prev.map((inc) => (inc.id === incidentId ? updated : inc))
-        );
         fetchPendingIncidentsCount();
+        return await res.json();
       }
     } catch (err) {
       console.error('Failed to update incident status:', err);
@@ -197,26 +165,13 @@ export default function App() {
   const handleDaysChange = (newDays) => {
     setDays(newDays);
     setVideoPage(1);
-    setIncidentPage(1);
     fetchVideos(1, newDays);
-    fetchIncidents(1, incidentFilter, newDays);
     fetchDashboardStats(newDays);
   };
 
   const handleVideoPageChange = (page) => {
     setVideoPage(page);
     fetchVideos(page, days);
-  };
-
-  const handleIncidentPageChange = (page) => {
-    setIncidentPage(page);
-    fetchIncidents(page, incidentFilter, days);
-  };
-
-  const handleIncidentFilterChange = (filter) => {
-    setIncidentFilter(filter);
-    setIncidentPage(1);
-    fetchIncidents(1, filter, days);
   };
 
   const activeProcessingCount = videos.filter((v) => v.status === 'processing').length;
@@ -265,7 +220,7 @@ export default function App() {
             <VideosTab
               videos={videos}
               videosTotal={videosTotal}
-              incidentsTotal={incidentsTotal}
+              incidentsTotal={dashboardStats?.incidents?.current ?? 0}
               currentPage={videoPage}
               totalPages={Math.max(1, Math.ceil(videosTotal / PAGE_SIZE))}
               days={days}
@@ -279,14 +234,7 @@ export default function App() {
           )}
           {activeTab === 'incidents' && (
             <IncidentsTab
-              incidents={incidents}
-              incidentsTotal={incidentsTotal}
               pendingIncidentsTotal={pendingIncidentsTotal}
-              currentPage={incidentPage}
-              totalPages={Math.max(1, Math.ceil(incidentsTotal / PAGE_SIZE))}
-              filter={incidentFilter}
-              onFilterChange={handleIncidentFilterChange}
-              onPageChange={handleIncidentPageChange}
               onUpdateStatus={handleUpdateIncidentStatus}
               onGoUpload={() => handleSetActiveTab('upload')}
             />

@@ -1,7 +1,19 @@
 """Pydantic schemas for request/response validation."""
-from typing import Literal
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
+
+T = TypeVar("T")
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Standard paginated response envelope."""
+
+    items: list[T]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
 
 
 class IncidentUpdate(BaseModel):

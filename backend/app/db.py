@@ -7,6 +7,7 @@ the same time. WAL mode keeps readers from blocking the writer.
 """
 import sqlite3
 from contextlib import closing
+from datetime import datetime, timedelta
 from typing import Any, Iterable, Optional
 
 from .config import settings
@@ -95,6 +96,13 @@ def query_one(sql: str, params: Iterable[Any] = ()) -> Optional[dict]:
     return rows[0] if rows else None
 
 
+def query_scalar(sql: str, params: Iterable[Any] = ()) -> Any:
+    """Return a single scalar value."""
+    with closing(get_conn()) as conn:
+        row = conn.execute(sql, tuple(params)).fetchone()
+        return row[0] if row else None
+
+
 # ----------------------------------------------------------------------
 # Convenience helpers specific to the domain
 # ----------------------------------------------------------------------
@@ -110,8 +118,18 @@ def get_video(video_id: int) -> Optional[dict]:
     return query_one(f"SELECT {VIDEO_FIELDS} FROM videos WHERE id = ?", (video_id,))
 
 
-def list_videos(include_incident_count: bool = True) -> list:
+def list_videos(
+    include_incident_count: bool = True,
+    limit: int = 10,
+    offset: int = 0,
+    days: Optional[int] = None,
+) -> list:
     fields = ", ".join(f"v.{f}" for f in VIDEO_FIELDS.split(", "))
+    where = ""
+    params: list = []
+    if days is not None:
+        where = " WHERE v.created_at >= ?"
+        params = [_days_ago(days)]
     if include_incident_count:
         return query(
             f"""
@@ -119,10 +137,24 @@ def list_videos(include_incident_count: bool = True) -> list:
                  , (SELECT COUNT(*) FROM incidents i WHERE i.video_id = v.id)
                    AS incident_count
               FROM videos v
+             {where}
              ORDER BY v.id DESC
-            """
+             LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
         )
-    return query(f"SELECT {fields} FROM videos v ORDER BY v.id DESC")
+    return query(
+        f"SELECT {fields} FROM videos v {where} ORDER BY v.id DESC LIMIT ? OFFSET ?",
+        (*params, limit, offset),
+    )
+
+
+def count_videos(days: Optional[int] = None) -> int:
+    if days is not None:
+        return query_scalar(
+            "SELECT COUNT(*) FROM videos WHERE created_at >= ?", (_days_ago(days),)
+        ) or 0
+    return query_scalar("SELECT COUNT(*) FROM videos") or 0
 
 
 def create_video(filename: str, file_path: str, source_type: str = "upload") -> int:
@@ -157,7 +189,13 @@ def get_incident(incident_id: int) -> Optional[dict]:
     )
 
 
-def list_incidents(video_id: Optional[int] = None, status: Optional[str] = None) -> list:
+def list_incidents(
+    video_id: Optional[int] = None,
+    status: Optional[str] = None,
+    limit: int = 10,
+    offset: int = 0,
+    days: Optional[int] = None,
+) -> list:
     sql = """
         SELECT i.*, v.filename AS video_filename, v.file_path AS video_file_path
           FROM incidents i
@@ -170,10 +208,49 @@ def list_incidents(video_id: Optional[int] = None, status: Optional[str] = None)
     if status:
         clauses.append("i.review_status = ?")
         params.append(status)
+    if days is not None:
+        clauses.append("i.created_at >= ?")
+        params.append(_days_ago(days))
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY i.id DESC"
+    sql += " ORDER BY i.id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
     return query(sql, params)
+
+
+def count_incidents(
+    video_id: Optional[int] = None,
+    status: Optional[str] = None,
+    days: Optional[int] = None,
+) -> int:
+    sql = "SELECT COUNT(*) FROM incidents i"
+    clauses, params = [], []
+    if video_id is not None:
+        clauses.append("i.video_id = ?")
+        params.append(video_id)
+    if status:
+        clauses.append("i.review_status = ?")
+        params.append(status)
+    if days is not None:
+        clauses.append("i.created_at >= ?")
+        params.append(_days_ago(days))
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    return query_scalar(sql, params) or 0
+
+
+def count_videos_between(start: str, end: str) -> int:
+    return query_scalar(
+        "SELECT COUNT(*) FROM videos WHERE created_at >= ? AND created_at < ?",
+        (start, end),
+    ) or 0
+
+
+def count_incidents_between(start: str, end: str) -> int:
+    return query_scalar(
+        "SELECT COUNT(*) FROM incidents WHERE created_at >= ? AND created_at < ?",
+        (start, end),
+    ) or 0
 
 
 def create_incident(
@@ -223,3 +300,8 @@ def _now() -> str:
     from .utils import now_str
 
     return now_str()
+
+
+def _days_ago(n: int) -> str:
+    """Return a 'YYYY-MM-DD HH:MM:SS' string for *n* days ago."""
+    return (datetime.now() - timedelta(days=n)).strftime("%Y-%m-%d 00:00:00")

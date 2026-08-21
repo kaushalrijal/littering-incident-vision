@@ -1,11 +1,12 @@
 """Video endpoints: upload, list, status, (re)process."""
 import logging
+import math
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from backend.app import db
 from backend.app.config import settings
-from backend.app.schemas import ProcessRequest
+from backend.app.schemas import PaginatedResponse, ProcessRequest
 from backend.app.services.worker import worker
 from backend.app.utils import is_allowed_video, safe_ext
 
@@ -61,10 +62,24 @@ async def upload_video(file: UploadFile = File(...)):
     return db.get_video(video_id)
 
 
-@router.get("")
-def list_videos():
-    """List all uploaded videos (newest first) with incident counts."""
-    return db.list_videos()
+@router.get("", response_model=PaginatedResponse)
+def list_videos(
+    page: int = Query(default=1, ge=1, description="Page number"),
+    page_size: int = Query(default=10, ge=1, le=100, description="Items per page"),
+    days: int | None = Query(default=None, ge=1, le=365, description="Filter videos from last N days"),
+):
+    """List uploaded videos (newest first) with incident counts."""
+    total = db.count_videos(days=days)
+    total_pages = max(1, math.ceil(total / page_size))
+    offset = (page - 1) * page_size
+    items = db.list_videos(limit=page_size, offset=offset, days=days)
+    return PaginatedResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
 
 
 @router.get("/{video_id}")

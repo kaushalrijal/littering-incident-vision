@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Film, Loader2, AlertTriangle, Camera } from 'lucide-react';
+import Pagination from './Pagination';
 
 function StatusDot({ status }) {
   const config = {
@@ -36,12 +37,21 @@ function StatCard({ icon: Icon, label, value, hint }) {
   );
 }
 
-export default function VideosTab({ videos, incidents = [], onReprocess, liveStats, onGoUpload }) {
+export default function VideosTab({
+  videos,
+  videosTotal = 0,
+  incidentsTotal = 0,
+  currentPage = 1,
+  totalPages = 1,
+  onPageChange,
+  onReprocess,
+  liveStats,
+  onGoUpload,
+}) {
   const [selectedVideo, setSelectedVideo] = useState(null);
 
   const processingCount = videos.filter((v) => v.status === 'processing').length;
   const completedCount = videos.filter((v) => v.status === 'completed').length;
-  const incidentCount = incidents.length;
 
   return (
     <div className="space-y-6">
@@ -65,7 +75,7 @@ export default function VideosTab({ videos, incidents = [], onReprocess, liveSta
         <StatCard
           icon={Film}
           label="Videos"
-          value={videos.length}
+          value={videosTotal}
           hint="uploaded"
         />
         <StatCard
@@ -77,7 +87,7 @@ export default function VideosTab({ videos, incidents = [], onReprocess, liveSta
         <StatCard
           icon={AlertTriangle}
           label="Incidents"
-          value={incidentCount}
+          value={incidentsTotal}
           hint="detected"
         />
       </div>
@@ -86,7 +96,7 @@ export default function VideosTab({ videos, incidents = [], onReprocess, liveSta
         {[
           { label: 'Processing', value: processingCount, color: 'text-[#4D7185]' },
           { label: 'Completed', value: completedCount, color: 'text-[#3E7C59]' },
-          { label: 'Incidents', value: incidentCount, color: 'text-[#C58B2A]' },
+          { label: 'Incidents', value: incidentsTotal, color: 'text-[#C58B2A]' },
         ].map((chip) => (
           <span
             key={chip.label}
@@ -101,7 +111,7 @@ export default function VideosTab({ videos, incidents = [], onReprocess, liveSta
       <div className="lg-card overflow-hidden">
         <div className="px-4 py-3 border-b border-[#E2E7E2] flex items-center justify-between">
           <h3 className="text-[14px] font-semibold text-[#26312B]">Video processing</h3>
-          <span className="text-[12px] text-[#8A948D]">{videos.length} total</span>
+          <span className="text-[12px] text-[#8A948D]">{videosTotal} total</span>
         </div>
 
         {videos.length === 0 ? (
@@ -232,6 +242,15 @@ export default function VideosTab({ videos, incidents = [], onReprocess, liveSta
               </tbody>
             </table>
           </div>
+        )}
+
+        {videosTotal > 0 && (
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            total={videosTotal}
+            onPageChange={onPageChange}
+          />
         )}
       </div>
 

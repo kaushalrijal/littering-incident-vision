@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AlertTriangle, Camera } from 'lucide-react';
+import Pagination from './Pagination';
 
 function formatTimestamp(ms) {
   const totalSec = Math.floor((ms || 0) / 1000);
@@ -82,14 +83,19 @@ function RuleTimeline() {
   );
 }
 
-export default function IncidentsTab({ incidents, onUpdateStatus, onGoUpload }) {
-  const [filter, setFilter] = useState('all');
+export default function IncidentsTab({
+  incidents,
+  incidentsTotal = 0,
+  pendingIncidentsTotal = 0,
+  currentPage = 1,
+  totalPages = 1,
+  filter = 'all',
+  onFilterChange,
+  onPageChange,
+  onUpdateStatus,
+  onGoUpload,
+}) {
   const [selectedIncident, setSelectedIncident] = useState(null);
-
-  const filteredIncidents = incidents.filter((inc) => {
-    if (filter === 'all') return true;
-    return inc.review_status === filter;
-  });
 
   const filters = [
     { id: 'all', label: 'All' },
@@ -97,8 +103,6 @@ export default function IncidentsTab({ incidents, onUpdateStatus, onGoUpload }) 
     { id: 'confirmed', label: 'Confirmed' },
     { id: 'false_alarm', label: 'False Alarm' },
   ];
-
-  const pendingCount = incidents.filter((i) => i.review_status === 'pending' || !i.review_status).length;
 
   return (
     <div className="space-y-6">
@@ -112,10 +116,10 @@ export default function IncidentsTab({ incidents, onUpdateStatus, onGoUpload }) 
         <div className="flex items-center gap-2 text-[12px] text-[#647067]">
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#FBF6EB] text-[#C58B2A] font-medium">
             <AlertTriangle className="w-3.5 h-3.5" />
-            {pendingCount} pending
+            {pendingIncidentsTotal} pending
           </span>
           <span className="px-2.5 py-1 rounded-md bg-[#EEF1EC] font-medium text-[#26312B]">
-            {incidents.length} total
+            {incidentsTotal} total
           </span>
         </div>
       </div>
@@ -125,7 +129,7 @@ export default function IncidentsTab({ incidents, onUpdateStatus, onGoUpload }) 
           <button
             key={f.id}
             type="button"
-            onClick={() => setFilter(f.id)}
+            onClick={() => onFilterChange(f.id)}
             className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors duration-150 ${
               filter === f.id
                 ? 'bg-[#EAF2EC] text-[#1F4D3A]'
@@ -137,7 +141,7 @@ export default function IncidentsTab({ incidents, onUpdateStatus, onGoUpload }) 
         ))}
       </div>
 
-      {filteredIncidents.length === 0 ? (
+      {incidents.length === 0 ? (
         <div className="lg-card py-14 px-6 text-center">
           <div className="w-11 h-11 mx-auto mb-3 rounded-xl bg-[#EAF2EC] border border-[#E2E7E2] flex items-center justify-center text-[#1F4D3A]">
             <Camera className="w-5 h-5" strokeWidth={1.75} />
@@ -146,7 +150,7 @@ export default function IncidentsTab({ incidents, onUpdateStatus, onGoUpload }) 
           <p className="text-[13px] text-[#647067] mt-1 max-w-md mx-auto">
             Suspected littering events will appear here after video processing.
           </p>
-          {incidents.length === 0 && (
+          {incidentsTotal === 0 && (
             <button
               type="button"
               onClick={onGoUpload}
@@ -157,8 +161,9 @@ export default function IncidentsTab({ incidents, onUpdateStatus, onGoUpload }) 
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {filteredIncidents.map((inc) => {
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {incidents.map((inc) => {
             const objectLabel = getObjectLabel(inc);
             const conf = Math.round((inc.confidence || 0) * 100);
 
@@ -243,6 +248,16 @@ export default function IncidentsTab({ incidents, onUpdateStatus, onGoUpload }) 
               </article>
             );
           })}
+          </div>
+
+          {incidentsTotal > 0 && (
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              total={incidentsTotal}
+              onPageChange={onPageChange}
+            />
+          )}
         </div>
       )}
 

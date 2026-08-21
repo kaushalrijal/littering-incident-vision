@@ -1,22 +1,83 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import UploadTab from './components/UploadTab';
 import VideosTab from './components/VideosTab';
 import IncidentsTab from './components/IncidentsTab';
 import WebcamTab from './components/WebcamTab';
 
+const PAGE_SIZE = 10;
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('videos');
-  const [videos, setVideos] = useState([]);
-  const [incidents, setIncidents] = useState([]);
   const [liveStats, setLiveStats] = useState({});
   const [wsConnected, setWsConnected] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const wsRef = useRef(null);
 
+  // Videos pagination
+  const [videos, setVideos] = useState([]);
+  const [videosTotal, setVideosTotal] = useState(0);
+  const [videoPage, setVideoPage] = useState(1);
+
+  // Incidents pagination + server-side filter
+  const [incidents, setIncidents] = useState([]);
+  const [incidentsTotal, setIncidentsTotal] = useState(0);
+  const [pendingIncidentsTotal, setPendingIncidentsTotal] = useState(0);
+  const [incidentPage, setIncidentPage] = useState(1);
+  const [incidentFilter, setIncidentFilter] = useState('all');
+
+  const videoPageRef = useRef(videoPage);
+  const incidentPageRef = useRef(incidentPage);
+  const incidentFilterRef = useRef(incidentFilter);
+
+  useEffect(() => { videoPageRef.current = videoPage; }, [videoPage]);
+  useEffect(() => { incidentPageRef.current = incidentPage; }, [incidentPage]);
+  useEffect(() => { incidentFilterRef.current = incidentFilter; }, [incidentFilter]);
+
+  const fetchVideos = useCallback(async (page = 1) => {
+    try {
+      const res = await fetch(`/api/videos?page=${page}&page_size=${PAGE_SIZE}`);
+      if (res.ok) {
+        const data = await res.json();
+        setVideos(data.items);
+        setVideosTotal(data.total);
+      }
+    } catch (err) {
+      console.error('Failed to fetch videos:', err);
+    }
+  }, []);
+
+  const fetchIncidents = useCallback(async (page = 1, status) => {
+    try {
+      let url = `/api/incidents?page=${page}&page_size=${PAGE_SIZE}`;
+      if (status && status !== 'all') url += `&status=${status}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setIncidents(data.items);
+        setIncidentsTotal(data.total);
+      }
+    } catch (err) {
+      console.error('Failed to fetch incidents:', err);
+    }
+  }, []);
+
+  const fetchPendingIncidentsCount = useCallback(async () => {
+    try {
+      const res = await fetch('/api/incidents?page=1&page_size=1&status=pending');
+      if (res.ok) {
+        const data = await res.json();
+        setPendingIncidentsTotal(data.total);
+      }
+    } catch (err) {
+      console.error('Failed to fetch pending count:', err);
+    }
+  }, []);
+
   useEffect(() => {
-    fetchVideos();
-    fetchIncidents();
+    fetchVideos(1);
+    fetchIncidents(1, 'all');
+    fetchPendingIncidentsCount();
     setupWebSocket();
 
     return () => {
@@ -25,30 +86,6 @@ export default function App() {
       }
     };
   }, []);
-
-  const fetchVideos = async () => {
-    try {
-      const res = await fetch('/api/videos');
-      if (res.ok) {
-        const data = await res.json();
-        setVideos(data);
-      }
-    } catch (err) {
-      console.error('Failed to fetch videos:', err);
-    }
-  };
-
-  const fetchIncidents = async () => {
-    try {
-      const res = await fetch('/api/incidents');
-      if (res.ok) {
-        const data = await res.json();
-        setIncidents(data);
-      }
-    } catch (err) {
-      console.error('Failed to fetch incidents:', err);
-    }
-  };
 
   const setupWebSocket = () => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -68,8 +105,9 @@ export default function App() {
             [message.video_id]: message.stats,
           }));
         } else if (message.type === 'video_status') {
-          fetchVideos();
-          fetchIncidents();
+          fetchVideos(videoPageRef.current);
+          fetchIncidents(incidentPageRef.current, incidentFilterRef.current);
+          fetchPendingIncidentsCount();
         }
       } catch (err) {
         console.error('Error parsing WebSocket message:', err);
@@ -85,7 +123,8 @@ export default function App() {
   };
 
   const handleUploadSuccess = () => {
-    fetchVideos();
+    fetchVideos(1);
+    setVideoPage(1);
     setActiveTab('videos');
   };
 
@@ -97,8 +136,10 @@ export default function App() {
         body: JSON.stringify({ force: true }),
       });
       if (res.ok) {
-        fetchVideos();
-        fetchIncidents();
+        fetchVideos(videoPage);
+        fetchIncidents(1, incidentFilter);
+        setIncidentPage(1);
+        fetchPendingIncidentsCount();
       }
     } catch (err) {
       console.error('Failed to reprocess video:', err);
@@ -117,10 +158,27 @@ export default function App() {
         setIncidents((prev) =>
           prev.map((inc) => (inc.id === incidentId ? updated : inc))
         );
+        fetchPendingIncidentsCount();
       }
     } catch (err) {
       console.error('Failed to update incident status:', err);
     }
+  };
+
+  const handleVideoPageChange = (page) => {
+    setVideoPage(page);
+    fetchVideos(page);
+  };
+
+  const handleIncidentPageChange = (page) => {
+    setIncidentPage(page);
+    fetchIncidents(page, incidentFilter);
+  };
+
+  const handleIncidentFilterChange = (filter) => {
+    setIncidentFilter(filter);
+    setIncidentPage(1);
+    fetchIncidents(1, filter);
   };
 
   const activeProcessingCount = videos.filter((v) => v.status === 'processing').length;
@@ -168,7 +226,11 @@ export default function App() {
           {activeTab === 'videos' && (
             <VideosTab
               videos={videos}
-              incidents={incidents}
+              videosTotal={videosTotal}
+              incidentsTotal={incidentsTotal}
+              currentPage={videoPage}
+              totalPages={Math.max(1, Math.ceil(videosTotal / PAGE_SIZE))}
+              onPageChange={handleVideoPageChange}
               onReprocess={handleReprocess}
               liveStats={liveStats}
               onGoUpload={() => handleSetActiveTab('upload')}
@@ -177,6 +239,13 @@ export default function App() {
           {activeTab === 'incidents' && (
             <IncidentsTab
               incidents={incidents}
+              incidentsTotal={incidentsTotal}
+              pendingIncidentsTotal={pendingIncidentsTotal}
+              currentPage={incidentPage}
+              totalPages={Math.max(1, Math.ceil(incidentsTotal / PAGE_SIZE))}
+              filter={incidentFilter}
+              onFilterChange={handleIncidentFilterChange}
+              onPageChange={handleIncidentPageChange}
               onUpdateStatus={handleUpdateIncidentStatus}
               onGoUpload={() => handleSetActiveTab('upload')}
             />

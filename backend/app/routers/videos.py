@@ -1,7 +1,7 @@
 """Video endpoints: upload, list, status, (re)process."""
 import logging
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from backend.app import db
 from backend.app.config import settings
@@ -62,9 +62,23 @@ async def upload_video(file: UploadFile = File(...)):
 
 
 @router.get("")
-def list_videos():
-    """List all uploaded videos (newest first) with incident counts."""
-    return db.list_videos()
+def list_videos(
+    sort: str = Query(default="newest", description=f"One of: {', '.join(db.VIDEO_SORTS)}"),
+    status: str | None = Query(default=None, description="Filter by processing status"),
+    search: str | None = Query(default=None, description="Substring match on filename"),
+):
+    """List uploaded videos with incident counts, sorted and filtered."""
+    if sort not in db.VIDEO_SORTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid sort. Allowed: {', '.join(db.VIDEO_SORTS)}",
+        )
+    if status and status not in db.VIDEO_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Allowed: {', '.join(db.VIDEO_STATUSES)}",
+        )
+    return db.list_videos(sort=sort, status=status, search=search)
 
 
 @router.get("/{video_id}")

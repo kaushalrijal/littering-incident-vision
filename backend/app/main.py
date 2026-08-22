@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.app import db
@@ -30,6 +31,15 @@ from backend.app.utils import ensure_openh264
 async def lifespan(app: FastAPI):
     ensure_openh264()
     db.init_db()
+    # A crash or restart can leave a video stuck 'processing'; the worker would
+    # then skip it forever. Reset any such orphans to 'failed' before we start.
+    interrupted = db.reconcile_interrupted_videos()
+    if interrupted:
+        logger.warning(
+            "Reset %d video(s) left 'processing' by a previous run to 'failed': %s",
+            len(interrupted),
+            interrupted,
+        )
     ws_manager.set_loop(asyncio.get_running_loop())
     worker.start()
     logger.info("Application started")
@@ -39,7 +49,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Real-Time Littering Detection System",
+    title="Kalanka — Real-Time Littering Detection System",
     description=(
         "Detects suspected littering incidents from CCTV / webcam / uploaded "
         "video using YOLO detection, ByteTrack tracking and a rule-based event "
@@ -73,5 +83,31 @@ app.include_router(webcam.router)
 # Stored media (uploaded videos, snapshots, evidence clips).
 app.mount("/media", StaticFiles(directory=settings.storage_dir), name="media")
 
-# Dashboard (React frontend app static mount).
-app.mount("/", StaticFiles(directory=settings.frontend_dir, html=True), name="frontend")
+# Built dashboard assets.
+app.mount(
+    "/assets",
+    StaticFiles(directory=settings.frontend_dir / "assets"),
+    name="assets",
+)
+
+
+def _safe_frontend_file(spa_path: str):
+    """Resolve spa_path inside frontend_dir; None if it escapes or is missing."""
+    if not spa_path or ".." in spa_path.split("/"):
+        return None
+    candidate = (settings.frontend_dir / spa_path).resolve()
+    try:
+        candidate.relative_to(settings.frontend_dir.resolve())
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
+@app.get("/{spa_path:path}", include_in_schema=False)
+def spa_fallback(spa_path: str):
+    """Serve built files directly; fall back to index.html so client-side
+    routes like /videos, /incidents and /live survive a hard refresh."""
+    existing = _safe_frontend_file(spa_path)
+    if existing is not None:
+        return FileResponse(existing)
+    return FileResponse(settings.frontend_dir / "index.html")

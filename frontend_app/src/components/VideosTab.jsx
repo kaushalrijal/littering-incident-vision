@@ -1,203 +1,311 @@
-import React, { useState } from 'react';
-import { 
-  Film, 
-  Play, 
-  RefreshCw, 
-  AlertTriangle, 
-  CheckCircle2, 
-  Clock, 
-  XCircle, 
-  Loader2,
-  Eye,
-  FileText
-} from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { RefreshCw, Eye, X } from 'lucide-react';
 
-export default function VideosTab({ videos, onReprocess, liveStats }) {
+const STATUS_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'pending', label: 'Pending' },
+  { id: 'processing', label: 'Processing' },
+  { id: 'completed', label: 'Completed' },
+  { id: 'failed', label: 'Failed' },
+];
+
+const SORTS = [
+  { id: 'newest', label: 'Newest first' },
+  { id: 'oldest', label: 'Oldest first' },
+  { id: 'name', label: 'Name A-Z' },
+  { id: 'incidents', label: 'Most incidents' },
+];
+
+function StatusBadge({ status }) {
+  if (status === 'completed') {
+    return (
+      <span className="inline-block bg-foreground px-2 py-1 text-[10px] leading-none font-bold tracking-[0.08em] text-background uppercase">
+        Completed
+      </span>
+    );
+  }
+  if (status === 'processing') {
+    return (
+      <span className="inline-flex animate-pulse items-center gap-1.5 border border-foreground px-2 py-1 text-[10px] leading-none font-bold tracking-[0.08em] uppercase">
+        <span className="h-1.5 w-1.5 bg-foreground" /> Processing
+      </span>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <span className="inline-block border border-destructive px-2 py-1 text-[10px] leading-none font-bold tracking-[0.08em] text-destructive uppercase">
+        Failed
+      </span>
+    );
+  }
+  return (
+    <span className="inline-block border border-border px-2 py-1 text-[10px] leading-none font-bold tracking-[0.08em] text-muted-foreground uppercase">
+      Pending
+    </span>
+  );
+}
+
+export default function VideosTab({ videos, liveStats, refreshKey }) {
+  const [items, setItems] = useState([]);
+  const [status, setStatus] = useState('all');
+  const [sort, setSort] = useState('newest');
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
   const [selectedVideo, setSelectedVideo] = useState(null);
 
-  const getStatusBadge = (status) => {
-    switch (status) {
-      case 'completed':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <CheckCircle2 className="w-3.5 h-3.5" /> Completed
-          </span>
-        );
-      case 'processing':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 animate-pulse">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing
-          </span>
-        );
-      case 'failed':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20">
-            <XCircle className="w-3.5 h-3.5" /> Failed
-          </span>
-        );
-      default:
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700">
-            <Clock className="w-3.5 h-3.5" /> Pending
-          </span>
-        );
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (sort !== 'newest') params.set('sort', sort);
+    if (status !== 'all') params.set('status', status);
+    if (search) params.set('search', search);
+
+    let cancelled = false;
+    fetch(`/api/videos?${params.toString()}`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        if (!cancelled) setItems(data);
+      })
+      .catch((err) => console.error('Failed to fetch videos:', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [status, sort, search, refreshKey]);
+
+  useEffect(() => {
+    if (!selectedVideo) return;
+    const onKey = (e) => e.key === 'Escape' && setSelectedVideo(null);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedVideo]);
+
+  const handleReprocess = async (videoId) => {
+    try {
+      await fetch(`/api/videos/${videoId}/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      });
+    } catch (err) {
+      console.error('Failed to reprocess video:', err);
     }
   };
 
   return (
     <div className="space-y-6">
-      {/* Header & Stats Cards */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-semibold text-slate-100 tracking-tight">Videos & Output Review</h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Real-time pipeline queue, output video preview, and incident detection metrics.
-          </p>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          {STATUS_FILTERS.map((f) =>
+            status === f.id ? (
+              <button
+                key={f.id}
+                onClick={() => setStatus(f.id)}
+                className="chip chip-active"
+              >
+                {f.label}
+              </button>
+            ) : (
+              <button key={f.id} onClick={() => setStatus(f.id)} className="chip">
+                {f.label}
+              </button>
+            )
+          )}
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search filename…"
+            className="field sm:w-56"
+          />
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value)}
+            className="field cursor-pointer sm:w-44"
+          >
+            {SORTS.map((s) => (
+              <option key={s.id} value={s.id}>
+                Sort: {s.label}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
-      {/* Videos List Table */}
-      <div className="bg-slate-950 border border-slate-800/80 rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-300">
-            <thead className="bg-slate-900/60 border-b border-slate-800 text-[11px] uppercase tracking-wider text-slate-400 font-semibold">
-              <tr>
-                <th className="py-3.5 px-4">Video File</th>
-                <th className="py-3.5 px-4">Status</th>
-                <th className="py-3.5 px-4">Progress / FPS</th>
-                <th className="py-3.5 px-4">Incidents</th>
-                <th className="py-3.5 px-4">Uploaded</th>
-                <th className="py-3.5 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60 font-mono text-[12px]">
-              {videos.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="py-12 text-center text-slate-400 font-sans">
-                    No videos uploaded yet. Go to the Upload tab to add footage.
-                  </td>
-                </tr>
-              ) : (
-                videos.map((vid) => {
-                  const stats = liveStats[vid.id] || {};
-                  const isProcessing = vid.status === 'processing';
-                  const processedFrames = stats.processed_frames || vid.processed_frames || 0;
-                  const totalFrames = stats.total_frames || vid.total_frames || 0;
-                  const pct = totalFrames > 0 ? Math.round((processedFrames / totalFrames) * 100) : 0;
-                  const incidentsCount = stats.detected_incidents !== undefined ? stats.detected_incidents : (vid.detected_incidents || 0);
+      <div className="panel">
+        <div className="panel-header">
+          <p className="text-xs font-bold tracking-[0.08em] uppercase">Video library</p>
+          <p className="font-mono text-[11px] text-muted-foreground">
+            SHOWING {items.length} OF {videos.length}
+          </p>
+        </div>
 
-                  return (
-                    <tr key={vid.id} className="hover:bg-slate-900/40 transition-colors">
-                      <td className="py-3.5 px-4 font-sans font-medium text-slate-200">
-                        <div className="flex items-center gap-2.5">
-                          <Film className="w-4 h-4 text-slate-400 flex-shrink-0" />
-                          <span className="truncate max-w-xs">{vid.filename}</span>
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-4 font-sans">
-                        {getStatusBadge(vid.status)}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        {isProcessing ? (
-                          <div className="space-y-1 w-36 font-sans">
-                            <div className="flex justify-between text-[11px] text-slate-400">
-                              <span>{processedFrames}/{totalFrames || '?'}</span>
-                              <span>{pct}%</span>
-                            </div>
-                            <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-cyan-400 transition-all duration-300"
-                                style={{ width: `${pct}%` }}
-                              />
-                            </div>
+        <table className="w-full text-left">
+          <thead>
+            <tr className="border-b border-border">
+              <th className="px-5 py-3.5 text-[11px] font-bold tracking-[0.08em] uppercase">
+                File
+              </th>
+              <th className="px-4 py-3.5 text-[11px] font-bold tracking-[0.08em] uppercase">
+                Status
+              </th>
+              <th className="px-4 py-3.5 text-[11px] font-bold tracking-[0.08em] uppercase">
+                Progress
+              </th>
+              <th className="px-4 py-3.5 text-[11px] font-bold tracking-[0.08em] uppercase">
+                Incidents
+              </th>
+              <th className="px-4 py-3.5 text-[11px] font-bold tracking-[0.08em] uppercase">
+                Uploaded
+              </th>
+              <th className="px-5 py-3.5 text-right text-[11px] font-bold tracking-[0.08em] uppercase">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-5 py-16 text-center">
+                  <p className="text-sm font-bold">No videos found</p>
+                  <p className="mt-1.5 text-sm text-muted-foreground">
+                    Upload footage or clear the active filters.
+                  </p>
+                </td>
+              </tr>
+            ) : (
+              items.map((vid) => {
+                const stats = liveStats[vid.id] || {};
+                const isProcessing = vid.status === 'processing';
+                const processedFrames =
+                  stats.processed_frames ?? vid.processed_frames ?? 0;
+                const totalFrames = stats.total_frames ?? vid.total_frames ?? 0;
+                const pct =
+                  totalFrames > 0 ? Math.round((processedFrames / totalFrames) * 100) : 0;
+                const incidentCount =
+                  stats.detected_incidents ?? vid.detected_incidents ?? vid.incident_count ?? 0;
+
+                return (
+                  <tr key={vid.id} className="border-b border-border last:border-b-0 transition-colors hover:bg-sidebar">
+                    <td className="max-w-xs px-5 py-4">
+                      <p className="truncate text-sm font-bold">{vid.filename}</p>
+                      <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                        #{vid.id} · {(vid.duration_ms / 1000).toFixed(1)}s
+                        {vid.width > 0 && ` · ${vid.width}×${vid.height}`}
+                      </p>
+                    </td>
+                    <td className="px-4 py-4">
+                      <StatusBadge status={vid.status} />
+                    </td>
+                    <td className="px-4 py-4">
+                      {isProcessing ? (
+                        <div className="w-32 space-y-1.5">
+                          <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
+                            <span>
+                              {processedFrames}/{totalFrames || '?'}
+                            </span>
+                            <span>{pct}%</span>
                           </div>
-                        ) : (
-                          <span className="text-slate-400 font-sans">
-                            {vid.processed_frames ? `${vid.processed_frames} frames` : '-'}
-                            {vid.fps ? ` • ${vid.fps} FPS` : ''}
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        {incidentsCount > 0 ? (
-                          <span className="inline-flex items-center gap-1 text-rose-400 font-semibold bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20">
-                            <AlertTriangle className="w-3.5 h-3.5" /> {incidentsCount}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400">0</span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-400 font-sans text-[11px]">
-                        {new Date(vid.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </td>
-                      <td className="py-3.5 px-4 text-right font-sans space-x-2">
+                          <div className="h-1.5 bg-muted">
+                            <div
+                              className="h-full bg-foreground transition-all duration-300"
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {vid.processed_frames ? `${vid.processed_frames} frames` : '—'}
+                          {vid.fps ? ` · ${vid.fps.toFixed(1)} fps` : ''}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-4">
+                      {incidentCount > 0 ? (
+                        <span className="text-sm font-bold tabular-nums">{incidentCount}</span>
+                      ) : (
+                        <span className="text-sm text-muted-foreground tabular-nums">0</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-4 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+                      {new Date(vid.created_at).toLocaleString([], {
+                        day: '2-digit',
+                        month: 'short',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex justify-end gap-2">
                         {vid.status === 'completed' && (
                           <button
                             onClick={() => setSelectedVideo(vid)}
-                            className="px-2.5 py-1 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
+                            className="btn btn-outline gap-1.5 px-3 py-1.5"
                           >
-                            <Eye className="w-3.5 h-3.5" /> Output
+                            <Eye className="h-3.5 w-3.5" /> Output
                           </button>
                         )}
                         <button
-                          onClick={() => onReprocess(vid.id)}
+                          onClick={() => handleReprocess(vid.id)}
                           disabled={isProcessing}
-                          className="px-2.5 py-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-50 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
+                          className="btn btn-outline gap-1.5 px-3 py-1.5"
                         >
-                          <RefreshCw className="w-3.5 h-3.5" /> Re-run
+                          <RefreshCw className="h-3.5 w-3.5" /> Re-run
                         </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
 
-      {/* Output Video Review Modal */}
       {selectedVideo && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-lg max-w-4xl w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-              <div>
-                <h3 className="text-base font-semibold text-slate-100">
-                  Annotated Output Review: {selectedVideo.filename}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 p-4">
+          <div className="panel max-w-4xl w-full shadow-lg">
+            <div className="panel-header">
+              <div className="min-w-0">
+                <p className="label-micro">Annotated output</p>
+                <h3 className="truncate text-base font-black tracking-tight">
+                  {selectedVideo.filename}
                 </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Full YOLOv8 bounding boxes, track IDs, and top-right HUD `Assoc (Trash, Person)` overlay.
-                </p>
               </div>
               <button
                 onClick={() => setSelectedVideo(null)}
-                className="text-slate-400 hover:text-slate-200 text-xs px-2.5 py-1 rounded bg-slate-800"
+                className="btn btn-outline shrink-0 p-2"
+                title="Close"
               >
-                Close (Esc)
+                <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="aspect-video bg-black rounded-lg overflow-hidden border border-slate-800">
+            <div className="aspect-video overflow-hidden border-b border-border bg-black">
               <video
                 controls
                 autoPlay
                 src={`/media/output/${selectedVideo.id}.mp4`}
-                className="w-full h-full object-contain"
+                className="h-full w-full object-contain"
               >
                 Your browser does not support HTML5 video playback.
               </video>
             </div>
 
-            <div className="flex justify-between items-center text-xs text-slate-400 pt-2">
-              <span className="font-mono">
-                Duration: {((selectedVideo.duration_ms || 0) / 1000).toFixed(1)}s • FPS: {selectedVideo.fps || '-'}
-              </span>
-              <a
-                href={`/media/output/${selectedVideo.id}.mp4`}
-                download
-                className="text-cyan-400 hover:underline inline-flex items-center gap-1"
-              >
-                Download Output Video
+            <div className="flex items-center justify-between gap-4 bg-sidebar px-5 py-4">
+              <p className="font-mono text-[11px] text-muted-foreground uppercase">
+                {((selectedVideo.duration_ms || 0) / 1000).toFixed(1)}s ·{' '}
+                {selectedVideo.fps ? `${selectedVideo.fps.toFixed(1)} fps` : 'fps n/a'} ·{' '}
+                {selectedVideo.detected_incidents} incidents
+              </p>
+              <a href={`/media/output/${selectedVideo.id}.mp4`} download className="btn btn-solid px-3.5 py-2">
+                Download
               </a>
             </div>
           </div>

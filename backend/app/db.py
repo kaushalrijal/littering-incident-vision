@@ -110,19 +110,45 @@ def get_video(video_id: int) -> Optional[dict]:
     return query_one(f"SELECT {VIDEO_FIELDS} FROM videos WHERE id = ?", (video_id,))
 
 
-def list_videos(include_incident_count: bool = True) -> list:
+VIDEO_SORTS = {
+    "newest": "v.id DESC",
+    "oldest": "v.id ASC",
+    "name": "v.filename COLLATE NOCASE ASC",
+    "incidents": "(SELECT COUNT(*) FROM incidents i WHERE i.video_id = v.id) DESC, v.id DESC",
+}
+
+
+def list_videos(
+    sort: str = "newest",
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+) -> list:
+    """List videos, newest first by default.
+
+    ``sort`` is a key in ``VIDEO_SORTS``, ``status`` filters on the
+    processing status and ``search`` does a case-insensitive substring
+    match against the filename.
+    """
     fields = ", ".join(f"v.{f}" for f in VIDEO_FIELDS.split(", "))
-    if include_incident_count:
-        return query(
-            f"""
-            SELECT {fields}
-                 , (SELECT COUNT(*) FROM incidents i WHERE i.video_id = v.id)
-                   AS incident_count
-              FROM videos v
-             ORDER BY v.id DESC
-            """
-        )
-    return query(f"SELECT {fields} FROM videos v ORDER BY v.id DESC")
+    order_by = VIDEO_SORTS.get(sort, VIDEO_SORTS["newest"])
+    clauses, params = [], []
+    if status:
+        clauses.append("v.status = ?")
+        params.append(status)
+    if search:
+        clauses.append("v.filename LIKE ?")
+        params.append(f"%{search}%")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return query(
+        f"""
+        SELECT {fields}
+             , (SELECT COUNT(*) FROM incidents i WHERE i.video_id = v.id)
+               AS incident_count
+          FROM videos v{where}
+         ORDER BY {order_by}
+        """,
+        params,
+    )
 
 
 def create_video(filename: str, file_path: str, source_type: str = "upload") -> int:
@@ -145,6 +171,34 @@ def update_video(video_id: int, **fields: Any) -> None:
     )
 
 
+def reconcile_interrupted_videos() -> list:
+    """Recover videos left mid-processing by a previous run (a crash or restart).
+
+    The single background worker handles one video at a time and always moves a
+    row on to 'completed' or 'failed' when it stops working on it. So any row
+    still marked 'processing' when the server starts was interrupted before it
+    could finish. Reset those rows to 'failed' with a clear message so they never
+    stay stuck, and so the operator can re-run them from the dashboard. Returns
+    the list of video ids that were reset.
+    """
+    rows = query("SELECT id FROM videos WHERE status = 'processing'")
+    ids = [row["id"] for row in rows]
+    if not ids:
+        return []
+    placeholders = ", ".join("?" for _ in ids)
+    execute(
+        f"UPDATE videos SET status = 'failed', error = ?, updated_at = ? "
+        f"WHERE id IN ({placeholders})",
+        (
+            "Processing was interrupted before it finished (for example, the "
+            "server stopped). Use Re-run to try again.",
+            _now(),
+            *ids,
+        ),
+    )
+    return ids
+
+
 def get_incident(incident_id: int) -> Optional[dict]:
     return query_one(
         """
@@ -157,7 +211,26 @@ def get_incident(incident_id: int) -> Optional[dict]:
     )
 
 
-def list_incidents(video_id: Optional[int] = None, status: Optional[str] = None) -> list:
+INCIDENT_SORTS = {
+    "newest": "i.id DESC",
+    "oldest": "i.id ASC",
+    "confidence": "i.confidence DESC, i.id DESC",
+    "timestamp": "i.timestamp_ms DESC, i.id DESC",
+}
+
+
+def list_incidents(
+    video_id: Optional[int] = None,
+    status: Optional[str] = None,
+    sort: str = "newest",
+    min_confidence: Optional[float] = None,
+    search: Optional[str] = None,
+) -> list:
+    """List incidents joined with their video, newest first by default.
+
+    Sortable via ``INCIDENT_SORTS`` keys; filterable by video, review
+    status, minimum confidence and a substring match on the reason text.
+    """
     sql = """
         SELECT i.*, v.filename AS video_filename, v.file_path AS video_file_path
           FROM incidents i
@@ -170,9 +243,15 @@ def list_incidents(video_id: Optional[int] = None, status: Optional[str] = None)
     if status:
         clauses.append("i.review_status = ?")
         params.append(status)
+    if min_confidence is not None:
+        clauses.append("i.confidence >= ?")
+        params.append(min_confidence)
+    if search:
+        clauses.append("(i.reason LIKE ? OR v.filename LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY i.id DESC"
+    sql += f" ORDER BY {INCIDENT_SORTS.get(sort, INCIDENT_SORTS['newest'])}"
     return query(sql, params)
 
 

@@ -1,23 +1,104 @@
 @import "tailwindcss";
 
+@theme inline {
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Fira Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-sidebar: var(--sidebar);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-border: var(--border);
+}
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.005 285.823);
+  --card: oklch(1 0 0);
+  --sidebar: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --destructive: oklch(0.577 0.245 27.325);
+  --success: oklch(0.51 0.13 160);
+  --border: oklch(0.92 0.004 286.32);
+}
+
 @layer base {
+  * {
+    @apply border-border;
+  }
+
   body {
-    @apply bg-slate-900 text-slate-100 antialiased font-sans min-h-screen selection:bg-cyan-500 selection:text-slate-900;
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  ::selection {
+    background: var(--foreground);
+    color: var(--background);
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
   }
 }
 
-/* Custom scrollbars */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: #0f172a;
-}
-::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+@layer components {
+  .btn {
+    @apply inline-flex cursor-pointer items-center justify-center gap-2 px-4 py-2 text-[11px] leading-none font-bold tracking-[0.08em] uppercase transition-colors select-none disabled:pointer-events-none disabled:opacity-40;
+  }
+
+  .btn-solid {
+    @apply border-2 border-foreground bg-foreground text-background hover:bg-foreground/90;
+  }
+
+  .btn-outline {
+    @apply border border-foreground bg-card text-foreground hover:bg-muted;
+  }
+
+  .btn-danger {
+    @apply border-2 border-destructive bg-destructive text-white hover:bg-destructive/90 hover:border-destructive/90;
+  }
+
+  .btn-danger-active {
+    @apply bg-destructive text-white hover:bg-destructive/90;
+  }
+
+  .label-micro {
+    @apply text-[11px] font-semibold tracking-[0.14em] text-muted-foreground uppercase;
+  }
+
+  .field {
+    @apply h-10 w-full appearance-none border border-foreground bg-card px-3 text-xs font-semibold tracking-[0.06em] text-foreground uppercase focus:bg-muted focus:outline-none;
+  }
+
+  .chip {
+    @apply inline-flex cursor-pointer items-center justify-center gap-1.5 border border-foreground bg-card px-3.5 py-2 text-[11px] leading-none font-bold tracking-[0.08em] whitespace-nowrap uppercase transition-colors select-none hover:bg-muted;
+  }
+
+  .chip-active {
+    @apply border-2 border-foreground bg-foreground px-[13px] py-[7px] text-background hover:bg-foreground;
+  }
+
+  .panel {
+    @apply border border-border bg-card;
+  }
+
+  .panel-header {
+    @apply flex min-h-12 items-center justify-between gap-3 border-b border-border bg-muted px-4 py-3;
+  }
 }

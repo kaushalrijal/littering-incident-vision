@@ -1,179 +1,137 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
+import { ROUTES, usePath, navigate } from './lib/router';
 import Sidebar from './components/Sidebar';
 import UploadTab from './components/UploadTab';
 import VideosTab from './components/VideosTab';
 import IncidentsTab from './components/IncidentsTab';
 import WebcamTab from './components/WebcamTab';
 
+const SECTION_META = {
+  upload: {
+    title: 'Upload footage',
+    desc: 'Queue a clip through detection, tracking and the event engine.',
+  },
+  videos: {
+    title: 'Videos & output',
+    desc: 'Processing queue, annotated outputs and per-video results.',
+  },
+  incidents: {
+    title: 'Incident review',
+    desc: 'Suspected littering events extracted by the rule engine.',
+  },
+  webcam: {
+    title: 'Live camera',
+    desc: 'Run the full pipeline on your webcam in real time.',
+  },
+};
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState('upload');
+  const path = usePath();
+  const activeTab = ROUTES[path] ?? 'upload';
   const [videos, setVideos] = useState([]);
-  const [incidents, setIncidents] = useState([]);
+  const [incidentCount, setIncidentCount] = useState(0);
   const [liveStats, setLiveStats] = useState({});
   const [wsConnected, setWsConnected] = useState(false);
-  const wsRef = useRef(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  function fetchCounts() {
+    Promise.all([fetch('/api/videos'), fetch('/api/incidents')])
+      .then(async ([vRes, iRes]) => {
+        if (vRes.ok) setVideos(await vRes.json());
+        if (iRes.ok) setIncidentCount((await iRes.json()).length);
+      })
+      .catch((err) => console.error('Failed to fetch counts:', err));
+  }
 
   useEffect(() => {
-    fetchVideos();
-    fetchIncidents();
-    setupWebSocket();
+    fetchCounts();
+
+    let closed = false;
+    let ws;
+    let retryTimer;
+
+    const connect = () => {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${window.location.host}/ws/events`);
+
+      ws.onopen = () => !closed && setWsConnected(true);
+
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === 'video_progress') {
+            setLiveStats((prev) => ({ ...prev, [message.video_id]: message.stats }));
+          } else if (message.type === 'video_status') {
+            fetchCounts();
+            setRefreshKey((k) => k + 1);
+          }
+        } catch (err) {
+          console.error('Error parsing WebSocket message:', err);
+        }
+      };
+
+      ws.onclose = () => {
+        if (closed) return;
+        setWsConnected(false);
+        retryTimer = setTimeout(connect, 3000);
+      };
+    };
+
+    connect();
 
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+      closed = true;
+      clearTimeout(retryTimer);
+      if (ws) ws.close();
     };
   }, []);
 
-  const fetchVideos = async () => {
-    try {
-      const res = await fetch('/api/videos');
-      if (res.ok) {
-        const data = await res.json();
-        setVideos(data);
-      }
-    } catch (err) {
-      console.error('Failed to fetch videos:', err);
-    }
+  const handleUploadSuccess = () => {
+    fetchCounts();
+    setRefreshKey((k) => k + 1);
+    navigate('/videos');
   };
 
-  const fetchIncidents = async () => {
-    try {
-      const res = await fetch('/api/incidents');
-      if (res.ok) {
-        const data = await res.json();
-        setIncidents(data);
-      }
-    } catch (err) {
-      console.error('Failed to fetch incidents:', err);
-    }
-  };
-
-  const setupWebSocket = () => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/events`;
-    const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-      setWsConnected(true);
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message.type === 'video_progress') {
-          setLiveStats((prev) => ({
-            ...prev,
-            [message.video_id]: message.stats,
-          }));
-        } else if (message.type === 'video_status') {
-          fetchVideos();
-          fetchIncidents();
-        }
-      } catch (err) {
-        console.error('Error parsing WebSocket message:', err);
-      }
-    };
-
-    ws.onclose = () => {
-      setWsConnected(false);
-      // Reconnect after 3 seconds
-      setTimeout(setupWebSocket, 3000);
-    };
-
-    wsRef.current = ws;
-  };
-
-  const handleUploadSuccess = (newVideo) => {
-    fetchVideos();
-    setActiveTab('videos');
-  };
-
-  const handleReprocess = async (videoId) => {
-    try {
-      const res = await fetch(`/api/videos/${videoId}/process`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ force: true }),
-      });
-      if (res.ok) {
-        fetchVideos();
-        fetchIncidents();
-      }
-    } catch (err) {
-      console.error('Failed to reprocess video:', err);
-    }
-  };
-
-  const handleUpdateIncidentStatus = async (incidentId, reviewStatus) => {
-    try {
-      const res = await fetch(`/api/incidents/${incidentId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ review_status: reviewStatus }),
-      });
-      if (res.ok) {
-        const updated = await res.json();
-        setIncidents((prev) =>
-          prev.map((inc) => (inc.id === incidentId ? updated : inc))
-        );
-      }
-    } catch (err) {
-      console.error('Failed to update incident status:', err);
-    }
-  };
-
-  const activeProcessingCount = videos.filter((v) => v.status === 'processing').length;
+  const meta = SECTION_META[activeTab];
+  const processingCount = videos.filter((v) => v.status === 'processing').length;
 
   return (
-    <div className="flex h-screen bg-slate-900 overflow-hidden font-sans">
-      {/* Roboflow-inspired Left Sidebar */}
-      <Sidebar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        wsConnected={wsConnected}
-        activeProcessingCount={activeProcessingCount}
-      />
+    <div className="flex h-screen overflow-hidden bg-background">
+      <Sidebar wsConnected={wsConnected} processingCount={processingCount} />
 
-      {/* Main Workspace Area */}
-      <main className="flex-1 flex flex-col min-w-0 bg-slate-900 overflow-y-auto">
-        {/* Top Minimal Bar */}
-        <header className="h-16 border-b border-slate-800/80 px-8 flex items-center justify-between bg-slate-950/40 sticky top-0 z-10 backdrop-blur-md">
-          <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold text-slate-200 capitalize">
-              {activeTab.replace('_', ' ')}
-            </h2>
-            <span className="text-slate-600">•</span>
-            <span className="text-xs text-slate-400 font-mono">
-              Purwanchal Campus • Minor Project
-            </span>
-          </div>
+      <main className="min-w-0 flex-1 overflow-y-auto">
+        <header className="sticky top-0 z-10 border-b border-border bg-card">
+          <div className="flex items-center justify-between gap-6 px-6 py-7 md:px-10">
+            <div className="min-w-0">
+              <h1 className="truncate text-3xl font-black tracking-tight md:text-4xl">Kalanka</h1>
+              <p className="mt-1 text-sm text-muted-foreground">Littering incident detection</p>
+            </div>
 
-          <div className="flex items-center gap-3 text-xs text-slate-400">
-            <span className="px-2.5 py-1 rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono">
-              {videos.length} Videos
-            </span>
-            <span className="px-2.5 py-1 rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono">
-              {incidents.length} Incidents
-            </span>
+            <div className="hidden shrink-0 gap-2 sm:flex">
+              <span className="border border-border px-3.5 py-2.5 font-mono text-[11px] leading-none font-bold">
+                {videos.length} VIDEOS
+              </span>
+              <span className="border border-border px-3.5 py-2.5 font-mono text-[11px] leading-none font-bold text-destructive">
+                {incidentCount} INCIDENTS
+              </span>
+            </div>
           </div>
         </header>
 
-        {/* Tab Content Body */}
-        <div className="p-8 max-w-7xl w-full mx-auto">
+        <div className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10">
+          <section className="mb-9">
+            <h2 className="text-2xl font-black tracking-tight uppercase md:text-3xl">
+              {meta.title}
+            </h2>
+            <p className="mt-2 text-sm text-muted-foreground">{meta.desc}</p>
+          </section>
+
           {activeTab === 'upload' && <UploadTab onUploadSuccess={handleUploadSuccess} />}
           {activeTab === 'videos' && (
-            <VideosTab
-              videos={videos}
-              onReprocess={handleReprocess}
-              liveStats={liveStats}
-            />
+            <VideosTab videos={videos} liveStats={liveStats} refreshKey={refreshKey} />
           )}
           {activeTab === 'incidents' && (
-            <IncidentsTab
-              incidents={incidents}
-              onUpdateStatus={handleUpdateIncidentStatus}
-            />
+            <IncidentsTab videos={videos} refreshKey={refreshKey} />
           )}
           {activeTab === 'webcam' && <WebcamTab />}
         </div>

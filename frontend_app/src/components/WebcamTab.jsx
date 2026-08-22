@@ -1,5 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Camera, CameraOff, Play, Pause, Activity, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Camera, CameraOff, AlertTriangle } from 'lucide-react';
+
+// Colours for the overlay (match the dashboard theme).
+const PERSON_COLOR = '#ffffff'; // white boxes on the dark video feed
+const WASTE_COLOR = '#f43f5e'; // rose-500
+const LINK_COLOR = '#f59e0b'; // amber-500 (waste -> person association)
+
+const SEND_MIN_INTERVAL = 1000 / 30; // cap send attempts at ~30/s
+const RESPONSE_WATCHDOG_MS = 2500; // if no reply in this long, allow a resend
+const MAX_RECONNECT_DELAY = 8000;
 
 export default function WebcamTab() {
   const [isStreaming, setIsStreaming] = useState(false);
@@ -9,24 +18,246 @@ export default function WebcamTab() {
   const [incidentCount, setIncidentCount] = useState(0);
   const [lastIncident, setLastIncident] = useState(null);
   const [error, setError] = useState(null);
+  const [status, setStatus] = useState('offline'); // offline | connecting | live | reconnecting
 
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const outputImgRef = useRef(null);
+  const overlayRef = useRef(null); // visible annotation canvas, layered over the video
+  const captureRef = useRef(null); // offscreen canvas used to grab + encode frames
   const wsRef = useRef(null);
-  const animationFrameIdRef = useRef(null);
-  const lastFrameTimeRef = useRef(performance.now());
+
+  const rafIdRef = useRef(null);
+  const readyRef = useRef(true); // request/response pacing: true = safe to send next frame
+  const lastSendRef = useRef(0);
+  const manualStopRef = useRef(false); // true once the user clicks Stop (blocks reconnect)
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef(null);
+
+  // FPS accounting (based on frames actually returned by the server).
   const frameCounterRef = useRef(0);
-  const fpsTimerRef = useRef(performance.now());
+  const fpsTimerRef = useRef(0);
 
   useEffect(() => {
     return () => {
       stopCamera();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // -- Overlay drawing -------------------------------------------------------
+  const drawOverlay = (meta) => {
+    const canvas = overlayRef.current;
+    if (!canvas) return;
+    const w = meta.width;
+    const h = meta.height;
+    if (!w || !h) return;
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+
+    const dets = meta.detections || [];
+
+    // Index persons by track id so we can draw association lines.
+    const personById = {};
+    for (const d of dets) {
+      if (d.kind === 'person' && d.track_id != null) personById[d.track_id] = d;
+    }
+
+    // Association lines first, so boxes draw on top.
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = LINK_COLOR;
+    ctx.setLineDash([6, 4]);
+    for (const d of dets) {
+      if (d.kind === 'waste' && d.assoc_person != null && personById[d.assoc_person]) {
+        const p = personById[d.assoc_person];
+        const [wx1, wy1, wx2, wy2] = d.bbox;
+        const [px1, py1, px2, py2] = p.bbox;
+        ctx.beginPath();
+        ctx.moveTo((wx1 + wx2) / 2, (wy1 + wy2) / 2);
+        ctx.lineTo((px1 + px2) / 2, (py1 + py2) / 2);
+        ctx.stroke();
+      }
+    }
+    ctx.setLineDash([]);
+
+    // Boxes + labels.
+    ctx.font = '14px "Fira Mono", ui-monospace, monospace';
+    ctx.textBaseline = 'alphabetic';
+    for (const d of dets) {
+      const [x1, y1, x2, y2] = d.bbox;
+      const color = d.kind === 'person' ? PERSON_COLOR : WASTE_COLOR;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = color;
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+      let label = d.class_name || d.kind;
+      if (d.track_id != null) label += ` #${d.track_id}`;
+      if (typeof d.conf === 'number') label += ` ${d.conf.toFixed(2)}`;
+      if (d.kind === 'waste' && d.assoc_person != null) label += ` -> p${d.assoc_person}`;
+
+      const padX = 4;
+      const textW = ctx.measureText(label).width;
+      const boxH = 17;
+      const labelY = y1 - boxH >= 0 ? y1 - boxH : y1; // keep the label on screen
+      ctx.fillStyle = color;
+      ctx.fillRect(x1, labelY, textW + padX * 2, boxH);
+      ctx.fillStyle = '#17171a';
+      ctx.fillText(label, x1 + padX, labelY + boxH - 4);
+    }
+  };
+
+  // -- Incoming server messages ---------------------------------------------
+  const handleMessage = (event) => {
+    let data;
+    try {
+      data = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+
+    if (data.type === 'error') {
+      // Terminal server-side error (e.g. another session active, model failed).
+      setError(data.message || 'The camera server reported an error.');
+      manualStopRef.current = true; // do not auto-reconnect into the same error
+      teardown();
+      setIsStreaming(false);
+      setStatus('offline');
+      return;
+    }
+
+    if (data.type !== 'webcam_frame') return;
+
+    // A reply arrived: it is safe to send the next frame.
+    readyRef.current = true;
+
+    if (data.mode === 'meta') {
+      drawOverlay(data);
+    }
+    setLatency(data.inference_ms || 0);
+    setAssociations(data.associations || []);
+
+    if (data.events && data.events.length > 0) {
+      setIncidentCount((prev) => prev + data.events.length);
+      setLastIncident(data.events[0]);
+    }
+
+    frameCounterRef.current += 1;
+    const now = performance.now();
+    if (now - fpsTimerRef.current >= 1000) {
+      setFps(frameCounterRef.current);
+      frameCounterRef.current = 0;
+      fpsTimerRef.current = now;
+    }
+  };
+
+  // -- WebSocket lifecycle ---------------------------------------------------
+  const connectWs = () => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/webcam`;
+    const ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      reconnectAttemptsRef.current = 0;
+      readyRef.current = true;
+      lastSendRef.current = 0;
+      setError(null);
+      setIsStreaming(true);
+      setStatus('live');
+    };
+
+    ws.onmessage = handleMessage;
+
+    ws.onerror = () => {
+      // Let onclose decide whether to reconnect; errors are usually followed by
+      // a close. Avoid tearing down the camera on a transient blip.
+    };
+
+    ws.onclose = () => {
+      if (manualStopRef.current) {
+        setIsStreaming(false);
+        setStatus('offline');
+        return;
+      }
+      scheduleReconnect();
+    };
+  };
+
+  const scheduleReconnect = () => {
+    setStatus('reconnecting');
+    setIsStreaming(true); // camera is still on; we are just re-opening the socket
+    const attempt = reconnectAttemptsRef.current;
+    const delay = Math.min(MAX_RECONNECT_DELAY, 1000 * 2 ** attempt);
+    reconnectAttemptsRef.current = attempt + 1;
+    setError(`Connection lost. Reconnecting in ${Math.round(delay / 1000)}s...`);
+    reconnectTimerRef.current = setTimeout(() => {
+      if (manualStopRef.current) return;
+      connectWs();
+    }, delay);
+  };
+
+  // -- Frame capture + send loop --------------------------------------------
+  const startSendLoop = () => {
+    const tick = () => {
+      const ws = wsRef.current;
+      const video = videoRef.current;
+      const canvas = captureRef.current;
+      const now = performance.now();
+
+      // Watchdog: if a reply never came, allow the stream to recover.
+      if (!readyRef.current && now - lastSendRef.current > RESPONSE_WATCHDOG_MS) {
+        readyRef.current = true;
+      }
+
+      if (
+        ws &&
+        ws.readyState === WebSocket.OPEN &&
+        video &&
+        canvas &&
+        readyRef.current &&
+        now - lastSendRef.current >= SEND_MIN_INTERVAL &&
+        video.videoWidth > 0 &&
+        video.videoHeight > 0
+      ) {
+        if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
+        if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        readyRef.current = false;
+        lastSendRef.current = now;
+        canvas.toBlob(
+          (blob) => {
+            const sock = wsRef.current;
+            if (blob && sock && sock.readyState === WebSocket.OPEN) {
+              sock.send(blob); // binary JPEG; server replies with metadata
+            } else {
+              readyRef.current = true; // nothing sent; do not stall the loop
+            }
+          },
+          'image/jpeg',
+          0.7
+        );
+      }
+
+      if (!manualStopRef.current) {
+        rafIdRef.current = requestAnimationFrame(tick);
+      }
+    };
+    rafIdRef.current = requestAnimationFrame(tick);
+  };
+
+  // -- Start / stop ----------------------------------------------------------
   const startCamera = async () => {
     setError(null);
+    setIncidentCount(0);
+    setLastIncident(null);
+    manualStopRef.current = false;
+    reconnectAttemptsRef.current = 0;
+    setStatus('connecting');
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 } },
@@ -35,241 +266,198 @@ export default function WebcamTab() {
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        await videoRef.current.play().catch(() => {});
       }
 
-      // Connect WebSocket
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws/webcam`;
-      const ws = new WebSocket(wsUrl);
-
-      ws.onopen = () => {
-        setIsStreaming(true);
-        startStreamingLoop(ws);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'webcam_frame') {
-            if (outputImgRef.current) {
-              outputImgRef.current.src = data.image;
-            }
-            setLatency(data.inference_ms || 0);
-            setAssociations(data.associations || []);
-
-            if (data.events && data.events.length > 0) {
-              setIncidentCount((prev) => prev + data.events.length);
-              setLastIncident(data.events[0]);
-            }
-
-            // Calculate FPS
-            frameCounterRef.current += 1;
-            const now = performance.now();
-            if (now - fpsTimerRef.current >= 1000) {
-              setFps(frameCounterRef.current);
-              frameCounterRef.current = 0;
-              fpsTimerRef.current = now;
-            }
-          }
-        } catch (e) {
-          console.error('Error parsing webcam WS message:', e);
-        }
-      };
-
-      ws.onerror = (e) => {
-        setError('WebSocket error connecting to camera server endpoint.');
-        stopCamera();
-      };
-
-      ws.onclose = () => {
-        setIsStreaming(false);
-      };
-
-      wsRef.current = ws;
+      fpsTimerRef.current = performance.now();
+      connectWs();
+      startSendLoop();
     } catch (err) {
+      setStatus('offline');
       setError(`Camera access error: ${err.message || 'Could not access webcam'}`);
     }
   };
 
-  const stopCamera = () => {
-    setIsStreaming(false);
+  // Close socket + camera + loops, but leave the user-facing state alone.
+  const teardown = () => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (rafIdRef.current) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
     if (wsRef.current) {
-      wsRef.current.close();
+      const ws = wsRef.current;
+      ws.onclose = null; // prevent the reconnect handler from firing on manual close
+      ws.onerror = null;
+      ws.onmessage = null;
+      try {
+        ws.close();
+      } catch {
+        /* ignore */
+      }
       wsRef.current = null;
     }
-
     if (videoRef.current && videoRef.current.srcObject) {
-      const tracks = videoRef.current.srcObject.getTracks();
-      tracks.forEach((track) => track.stop());
+      videoRef.current.srcObject.getTracks().forEach((t) => t.stop());
       videoRef.current.srcObject = null;
     }
-
-    if (animationFrameIdRef.current) {
-      cancelAnimationFrame(animationFrameIdRef.current);
-      animationFrameIdRef.current = null;
+    const canvas = overlayRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
   };
 
-  const startStreamingLoop = (ws) => {
-    let lastSend = 0;
-    const interval = 1000 / 20; // max ~20 FPS send rate to server
-
-    const sendFrame = (timestamp) => {
-      if (ws.readyState === WebSocket.OPEN && videoRef.current && canvasRef.current) {
-        if (timestamp - lastSend >= interval) {
-          lastSend = timestamp;
-          const video = videoRef.current;
-          const canvas = canvasRef.current;
-          if (video.videoWidth > 0 && video.videoHeight > 0) {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const b64Image = canvas.toDataURL('image/jpeg', 0.7);
-
-            ws.send(
-              JSON.stringify({
-                image: b64Image,
-                timestamp_ms: Date.now(),
-              })
-            );
-          }
-        }
-      }
-      if (ws.readyState === WebSocket.OPEN) {
-        animationFrameIdRef.current = requestAnimationFrame(sendFrame);
-      }
-    };
-
-    animationFrameIdRef.current = requestAnimationFrame(sendFrame);
+  const stopCamera = () => {
+    manualStopRef.current = true;
+    teardown();
+    setIsStreaming(false);
+    setStatus('offline');
+    setFps(0);
+    setLatency(0);
+    setAssociations([]);
   };
 
-  return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      {/* Header & Controls */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold text-slate-100 tracking-tight">Real-Time Webcam Testing</h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Test YOLOv8 + ByteTrack + EventEngine in real time using your laptop or USB camera over WebSockets.
-          </p>
-        </div>
+  const statusLabel = {
+    offline: 'Offline',
+    connecting: 'Connecting',
+    live: 'Live',
+    reconnecting: 'Reconnecting',
+  }[status];
 
-        <div className="flex items-center gap-3">
-          {!isStreaming ? (
-            <button
-              onClick={startCamera}
-              className="px-4 py-2 rounded-md bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-medium text-xs tracking-wide transition-colors flex items-center gap-2"
-            >
-              <Camera className="w-4 h-4" /> Start Live Camera
-            </button>
-          ) : (
-            <button
-              onClick={stopCamera}
-              className="px-4 py-2 rounded-md bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 border border-rose-500/30 font-medium text-xs tracking-wide transition-colors flex items-center gap-2"
-            >
-              <CameraOff className="w-4 h-4" /> Stop Stream
-            </button>
-          )}
-        </div>
+  return (
+    <div className="mx-auto max-w-5xl space-y-6">
+      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
+        <span className="chip pointer-events-none gap-2">
+          <span
+            className={`h-1.5 w-1.5 ${
+              status === 'live'
+                ? 'animate-pulse bg-success'
+                : status === 'offline'
+                  ? 'bg-muted-foreground'
+                  : 'animate-pulse bg-foreground'
+            }`}
+          />
+          {statusLabel}
+        </span>
+
+        {!isStreaming ? (
+          <button onClick={startCamera} className="btn btn-solid px-5 py-2.5">
+            <Camera className="h-4 w-4" strokeWidth={2.5} /> Start live camera
+          </button>
+        ) : (
+          <button onClick={stopCamera} className="btn btn-danger px-5 py-2.5">
+            <CameraOff className="h-4 w-4" strokeWidth={2.5} /> Stop stream
+          </button>
+        )}
       </div>
 
       {error && (
-        <div className="p-3.5 rounded-md bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          <span>{error}</span>
+        <div className="flex items-start gap-3 border border-destructive p-4 text-destructive">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={2.5} />
+          <p className="text-xs leading-relaxed font-semibold">{error}</p>
         </div>
       )}
 
-      {/* Main Stream Canvas & HUD Cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Video Canvas Container */}
-        <div className="lg:col-span-2 space-y-4">
-          <div className="relative aspect-video bg-black rounded-lg overflow-hidden border border-slate-800 shadow-xl flex items-center justify-center">
-            {/* Hidden raw video & offscreen canvas */}
-            <video ref={videoRef} className="hidden" playsInline muted />
-            <canvas ref={canvasRef} className="hidden" />
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <div className="relative flex aspect-video items-center justify-center overflow-hidden border border-border bg-black">
+            <video
+              ref={videoRef}
+              className={isStreaming ? 'h-full w-full object-contain' : 'hidden'}
+              playsInline
+              muted
+              autoPlay
+            />
+            <canvas
+              ref={overlayRef}
+              className={
+                isStreaming
+                  ? 'pointer-events-none absolute inset-0 h-full w-full object-contain'
+                  : 'hidden'
+              }
+            />
+            <canvas ref={captureRef} className="hidden" />
 
-            {/* Output Processed Stream Image */}
-            {isStreaming ? (
-              <img
-                ref={outputImgRef}
-                alt="Real-time Annotated Camera Stream"
-                className="w-full h-full object-contain"
-              />
-            ) : (
-              <div className="text-center space-y-3 p-8">
-                <div className="w-12 h-12 rounded-full bg-slate-900 border border-slate-800 mx-auto flex items-center justify-center text-slate-500">
-                  <Camera className="w-6 h-6" />
-                </div>
-                <p className="text-xs text-slate-400">
-                  Camera stream offline. Click <span className="text-cyan-400 font-medium">Start Live Camera</span> above.
+            {!isStreaming && (
+              <div className="space-y-3 p-8 text-center">
+                <p className="font-mono text-[11px] text-muted-foreground uppercase">
+                  Camera offline — press start above
                 </p>
               </div>
             )}
 
-            {/* Live Indicator Overlay */}
             {isStreaming && (
-              <div className="absolute top-3 left-3 bg-slate-950/80 backdrop-blur-sm px-2.5 py-1 rounded border border-slate-800 text-[11px] font-mono text-emerald-400 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                LIVE STREAM
+              <div className="absolute top-3 left-3 flex items-center gap-2 bg-background px-2.5 py-1.5 font-mono text-[10px] leading-none font-bold tracking-wider uppercase">
+                <span
+                  className={`h-1.5 w-1.5 ${
+                    status === 'live'
+                      ? 'animate-pulse bg-success'
+                      : 'animate-pulse bg-destructive'
+                  }`}
+                />
+                {statusLabel}
               </div>
             )}
           </div>
         </div>
 
-        {/* Real-time Telemetry Panel */}
-        <div className="space-y-4">
-          <div className="p-4 rounded-lg bg-slate-950 border border-slate-800 space-y-4">
-            <h3 className="text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-              <Activity className="w-4 h-4 text-cyan-400" /> Real-time Metrics
-            </h3>
+        <div className="panel self-start">
+          <div className="panel-header">
+            <p className="text-xs font-bold tracking-[0.08em] uppercase">Telemetry</p>
+          </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="p-3 rounded bg-slate-900 border border-slate-800">
-                <span className="text-slate-400 text-[11px]">Stream FPS</span>
-                <p className="text-lg font-mono font-semibold text-slate-100 mt-0.5">{fps}</p>
-              </div>
-              <div className="p-3 rounded bg-slate-900 border border-slate-800">
-                <span className="text-slate-400 text-[11px]">Inference Latency</span>
-                <p className="text-lg font-mono font-semibold text-cyan-400 mt-0.5">{latency}ms</p>
-              </div>
+          <div className="grid grid-cols-2 divide-x divide-border border-b border-border">
+            <div className="bg-sidebar p-4">
+              <p className="label-micro">Stream fps</p>
+              <p className="mt-2 font-mono text-xl leading-none font-bold tabular-nums">{fps}</p>
             </div>
-
-            {/* Active Associations Box */}
-            <div className="space-y-2">
-              <span className="text-xs font-medium text-slate-300">Active Associations (Trash, Person):</span>
-              <div className="p-3 rounded bg-slate-900 border border-slate-800 font-mono text-xs text-yellow-300">
-                {associations.length > 0 ? (
-                  associations.map(([w, p], i) => (
-                    <span key={i} className="inline-block mr-2 px-2 py-0.5 rounded bg-yellow-500/10 border border-yellow-500/20">
-                      ({w}, {p})
-                    </span>
-                  ))
-                ) : (
-                  <span className="text-slate-500 font-sans">None</span>
-                )}
-              </div>
+            <div className="bg-sidebar p-4">
+              <p className="label-micro">Inference</p>
+              <p className="mt-2 font-mono text-xl leading-none font-bold tabular-nums">
+                {latency}ms
+              </p>
             </div>
+          </div>
 
-            {/* Live Incidents Alert Banner */}
-            <div className="p-3.5 rounded bg-slate-900 border border-slate-800 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-300 font-medium flex items-center gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400" /> Live Incidents
-                </span>
-                <span className="font-mono text-rose-400 font-bold">{incidentCount}</span>
-              </div>
-
-              {lastIncident ? (
-                <div className="p-2 rounded bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-300 leading-snug">
-                  {lastIncident.reason}
-                </div>
+          <div className="space-y-2 border-b border-border p-4">
+            <p className="label-micro">Active associations</p>
+            <div className="flex flex-wrap gap-1.5">
+              {associations.length > 0 ? (
+                associations.map(([w, p], i) => (
+                  <span
+                    key={i}
+                    className="border border-foreground px-1.5 py-0.5 font-mono text-[11px] font-bold"
+                  >
+                    ({w}, {p})
+                  </span>
+                ))
               ) : (
-                <p className="text-[11px] text-slate-500">No littering incidents detected in stream.</p>
+                <span className="font-mono text-[11px] text-muted-foreground">NONE</span>
               )}
             </div>
+          </div>
+
+          <div className="space-y-2 p-4">
+            <div className="flex items-center justify-between">
+              <span className="label-micro">Live incidents</span>
+              <span className="font-mono text-sm font-bold text-destructive tabular-nums">
+                {incidentCount}
+              </span>
+            </div>
+
+            {lastIncident ? (
+              <div className="border-l-4 border-destructive bg-sidebar p-2.5 pl-3 text-xs leading-snug font-medium">
+                {lastIncident.reason}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Nothing detected in this session.
+              </p>
+            )}
           </div>
         </div>
       </div>

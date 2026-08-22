@@ -15,17 +15,17 @@ The script scripts/evaluate.py runs the pipeline over the test videos. The scrip
 
 ### 2.1 The run
 
-1. Put the test videos in the data/test_videos folder.
+1. Put the labelled test videos in the data/test_videos folder.
 
 2. Go to the project folder.
 
-3. Run the script.
+3. Run the script. Name the fine-tuned model and its waste class. The committed default is the stock COCO model, so you must name both.
 
 ```bash
-python scripts/evaluate.py
+python scripts/evaluate.py --model ml/weights/best.pt --waste-classes trash
 ```
 
-The script prints a table. The table has one row per video:
+The script measures the complete event detector, not the detection model alone. The script prints a table. The table has one row per video:
 
 | Column | Content |
 | --- | --- |
@@ -35,7 +35,12 @@ The script prints a table. The table has one row per video:
 | fps | The processing speed |
 | incidents | The incident count |
 
-The script writes the report to the file data/eval_results.json.
+The script writes two reports:
+
+| File | Content |
+| --- | --- |
+| data/eval_results.json | The machine-readable results |
+| data/eval_report.md | A paste-ready table and the metrics for the report |
 
 ### 2.2 The options
 
@@ -43,14 +48,18 @@ The script writes the report to the file data/eval_results.json.
 | --- | --- | --- |
 | --videos | data/test_videos | The test video folder |
 | --ground-truth | data/ground_truth.csv | The ground truth file |
-| --model | none | Override the model |
+| --model | none | Override the model path |
+| --waste-classes | none | Override the waste class names |
 | --device | none | Override the device |
-| --out | data/eval_results.json | The report file |
+| --conf | none | Override the confidence threshold |
+| --no-output | off | Skip the annotated preview videos for speed |
+| --out | data/eval_results.json | The JSON report file |
+| --report | data/eval_report.md | The Markdown report file |
 
-Example with a different model:
+Example on a GPU:
 
 ```bash
-python scripts/evaluate.py --model yolov8s.pt --device 0
+python scripts/evaluate.py --model ml/weights/best.pt --waste-classes trash --device 0
 ```
 
 ## 3. The ground truth
@@ -68,12 +77,20 @@ cp data/ground_truth.csv.example data/ground_truth.csv
 2. Edit the file. The format is:
 
 ```text
-video,expected_incidents
-test_01.mp4,1
-test_02.mp4,0
+video,expected_incidents,scenario,event_time_s,notes
+drop_and_leave_01.mp4,1,drop+leave,4.5,person drops a bottle
+walk_past_litter_01.mp4,0,walk-past,,litter already present
 ```
 
-The value is 1 when the video contains a littering event. The value is 0 when the video has no event.
+The expected_incidents value is 1 when the video contains a littering event. The value is 0 when the video has no event. The other columns are optional:
+
+| Column | Task |
+| --- | --- |
+| scenario | A short label for the report table |
+| event_time_s | The second when the drop happens. This value enables the detection delay metric. |
+| notes | Free text for the team. The script ignores this column. |
+
+The column order is free. The script matches the columns by the header name. Lines that start with the # sign are ignored.
 
 ### 3.2 The file name match
 
@@ -97,9 +114,12 @@ The script calculates:
 | Accuracy | (TP + TN) / all counts |
 | Precision | TP / (TP + FP) |
 | Recall | TP / (TP + FN) |
+| Specificity | TN / (TN + FP) |
 | F1 | 2 * precision * recall / (precision + recall) |
+| False alarm rate | FP / (FP + TN) |
+| Miss rate | FN / (FN + TP) |
 
-The false alarm rate is the FP count divided by the total incident count.
+The false alarm rate is the fraction of the clean videos that fired an event in error. The script also reports the detection delay when the ground truth gives the event_time_s value. See section 6.
 
 ## 5. The suggested targets
 
@@ -121,7 +141,7 @@ The detection delay is the time from the event to the alarm. The delay has two p
 - The processing time of the frames.
 - The rule check time.
 
-The team can measure the delay with a stopwatch on the demo videos. Or the team compares the incident timestamp with the event time in the source.
+The team can measure the delay with a stopwatch on the demo videos. The script can also measure the delay. For each true-positive video that has an event_time_s value in the ground truth, the script subtracts the event time from the first incident time. The report gives the mean and the median delay.
 
 ## 7. The processing speed
 
@@ -144,7 +164,7 @@ The team collects these items for the report:
 - The clips of the incidents.
 - The training curves, if a custom model was trained.
 
-The eval_results.json file gives the exact numbers.
+The data/eval_report.md file gives a paste-ready table and the metrics. The data/eval_results.json file gives the exact numbers.
 
 ## 9. The limitation of the small test set
 

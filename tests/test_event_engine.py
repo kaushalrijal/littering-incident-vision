@@ -281,6 +281,18 @@ def test_carried_trash_entrance_not_skipped():
             return [waste(50, 245, 100, 275, 130)]  # person drops trash at 245 and continues walking to 475!
         return []
 
+    events = run_frames(engine, 40, persons, wastes)
+
+    # The trash is first seen inside the ignore_first_frames window, so it starts
+    # skipped like pre-existing litter. Because it then travels with the person
+    # (> 30 px from its birth spot while associated), the engine un-skips it as
+    # carried trash; once it is dropped and stays still while the person leaves,
+    # the rule fires exactly one event on the original track.
+    assert len(events) == 1, f"expected 1 event for carried-then-dropped trash, got {len(events)}"
+    assert events[0]["track_id"] == 50
+    assert events[0]["class_name"] == "bottle"
+
+
 def test_edge_entrance_carried_trash_association():
     """Trash born near the frame edge (x1 < edge_margin) carried by a person entering the screen associates successfully and is NOT skipped."""
     engine = make_engine()  # edge_margin = 20.0, ignore_first_frames = 5

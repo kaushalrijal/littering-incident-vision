@@ -25,7 +25,7 @@ Each row in the tables has three parts:
 | --- | --- | --- |
 | The run.py command gives an import error | The command runs from another folder | Go to the project folder first. |
 | The port is already in use | Another program uses the port | Change the PORT value in the .env file. |
-| The dashboard shows a blank page | The frontend folder is missing or empty | Create the frontend folder and restart the server. |
+| The dashboard shows a blank page | The frontend folder is missing or empty | Build the React dashboard. Run npm install and npm run build in the frontend_app folder. See the file 05-installation.md, section 2.2. Then restart the server. |
 | The server starts, but the health check fails | The server did not start correctly | Read the terminal log. Fix the first error. |
 
 ## 4. The model problems
@@ -50,7 +50,8 @@ Each row in the tables has three parts:
 | Problem | Cause | Fix |
 | --- | --- | --- |
 | The video stays in the "pending" status | The worker thread is not running | Restart the server. The worker starts at the server start. |
-| The video shows the "failed" status | The processing raised an error | Read the error in the video row. Read the terminal log. |
+| The video stays in the "processing" status | The server stopped during the processing | Restart the server. The server resets the interrupted video to the "failed" status at the next start. Then use the Re-run button. |
+| The video shows the "failed" status | The processing raised an error | Read the terminal log for the error message. The dashboard row shows only the Failed badge. The error text is also in the video record from the GET /api/videos/{id} endpoint. |
 | The video shows the "failed" status with an OpenCV error | The video file is damaged | Use another video file. |
 | The processing is slow | The model or the device is slow | Set FRAME_STEP to 3. Use the model yolov8n. Use a GPU. |
 | The processing stops at MAX_INCIDENTS | The video has many incidents | Increase the MAX_INCIDENTS value. Or do nothing, the limit is a safety. |
@@ -75,7 +76,20 @@ Each row in the tables has three parts:
 | The clip does not play in the browser | The clip uses the mp4v codec | Use the download link. Play the clip in VLC. |
 | The source video does not play | The browser does not support the codec | Convert the source video to H.264 mp4. |
 
-## 9. The database problems
+## 9. The webcam problems
+
+| Problem | Cause | Fix |
+| --- | --- | --- |
+| The browser shows a camera permission error | The browser blocked the camera | Allow the camera for the site in the browser settings. Then click Start Live Camera again. |
+| The camera does not start | Another program uses the camera | Close the other program. Reload the page. Then start the camera again. |
+| The live stream shows a WebSocket error | The dashboard cannot reach the server | Confirm that the server runs. Reload the page. |
+| The status shows "RECONNECTING" | The WebSocket closed. The server stopped, or the network dropped. | Wait. The tab reconnects on its own with a growing delay. Click Stop Stream and start again if it does not recover. |
+| The camera shows the message "Another camera session is already active" | A second tab or window already uses the camera | The server serves one camera session at a time. Close the other session first. Then start the camera again. |
+| The first annotated frames are slow to appear | The model loads on the first use | Wait a few seconds. The model loads one time. |
+| The live stream is slow | The computer processes each frame on the CPU | This is normal on a CPU. Use a computer with a GPU for a faster stream. |
+| The webcam events do not appear in the Incident Review tab | The system does not save the webcam events | This is correct behavior. The webcam path is for a live test only. |
+
+## 10. The database problems
 
 | Problem | Cause | Fix |
 | --- | --- | --- |
@@ -83,7 +97,7 @@ Each row in the tables has three parts:
 | The old incidents return after a reprocess | The reprocess did not finish | Wait until the status shows "completed". The old incidents are deleted at the start of the reprocess. |
 | The storage folder grows large | The clips and the previews stay on disk | Delete the files in the storage folder manually. |
 
-## 10. The evaluation problems
+## 11. The evaluation problems
 
 | Problem | Cause | Fix |
 | --- | --- | --- |
@@ -91,12 +105,12 @@ Each row in the tables has three parts:
 | The ground truth comparison is empty | The ground truth file has no match | Check the file names in the CSV file. The names must match the video names. |
 | The evaluate script fails at import | The script runs from another folder | Run the script from the project folder. |
 
-## 11. Where to look for help
+## 12. Where to look for help
 
 The log messages give the first information. The relevant sources are:
 
 - The terminal log.
-- The error field in the video row.
+- The error field in the video record from the API.
 - The eval_results.json file.
 - The README.md file.
 - The files in the docs folder.

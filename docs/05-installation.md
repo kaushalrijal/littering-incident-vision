@@ -60,6 +60,28 @@ pip install -r requirements.txt
 
 This install is smaller and is enough for the demo.
 
+### 2.2 The optional frontend build
+
+The dashboard is already built. The built files are in the frontend folder. The server serves these files. A normal install does not need Node.js.
+
+The operator needs Node.js only to change the dashboard. The source is in the frontend_app folder. The build steps are:
+
+```bash
+cd frontend_app
+npm install
+npm run build
+```
+
+The build command writes the new files to the frontend folder.
+
+For dashboard development, the operator can start the Vite development server:
+
+```bash
+npm run dev
+```
+
+The development server runs on port 5173. It sends the API and the WebSocket requests to the backend on port 8000. The backend must run at the same time.
+
 ## 3. The first run
 
 1. Start the server.
@@ -123,14 +145,19 @@ The .env file is optional. Without the file, the system uses the default values.
 | LOG_DETECTIONS | false | Write the detection log |
 | MAX_UPLOAD_MB | 500 | The upload size limit |
 | MAX_VIDEO_DURATION_S | 0 | The video length limit, 0 is no limit |
-| PROXIMITY_RADIUS | 150 | The near distance for rule N |
+| PROXIMITY_RADIUS | 180 | The near distance for rule N |
 | STATIONARY_THRESHOLD | 8 | The stationary movement limit |
-| STATIONARY_FRAMES | 12 | The stationary frame count for rule S |
-| LEAVE_DISTANCE | 120 | The leave distance for rule M |
+| STATIONARY_FRAMES | 8 | The stationary frame count for rule S |
+| LEAVE_DISTANCE | 100 | The leave distance for rule M |
 | MIN_TRACK_FRAMES | 5 | The minimum track age |
-| MIN_OBJECT_AREA | 400 | The minimum object area |
-| EDGE_MARGIN | 40 | The frame edge margin |
+| MIN_OBJECT_AREA | 150 | The minimum object area |
+| EDGE_MARGIN | 20 | The frame edge margin |
 | IGNORE_FIRST_FRAMES | 20 | The pre-existing litter window |
+| WASTE_RECONNECT_DIST | 60 | The reconnect distance for a lost waste track |
+| WASTE_RECONNECT_WINDOW | 30 | The reconnect window in frames for a waste track |
+| PERSON_RECONNECT_DIST | 80 | The reconnect distance for a lost person track |
+| PERSON_RECONNECT_WINDOW | 30 | The reconnect window in frames for a person track |
+| TRACK_BUFFER | 60 | The memory in frames for a lost track |
 | CLIP_BEFORE_MS | 2000 | The clip start before the event |
 | CLIP_AFTER_MS | 3000 | The clip end after the event |
 | DATABASE_PATH | backend/data/litter.db | The database file |
@@ -165,7 +192,7 @@ http://127.0.0.1:8000/api/health
 The page shows this result:
 
 ```json
-{"status": "ok"}
+{"status": "ok", "service": "Real-Time Littering Detection System", "version": "1.0.0"}
 ```
 
 3. Go to the dashboard address.

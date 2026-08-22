@@ -32,6 +32,7 @@ The main functions are:
 | get_video | Get one video record |
 | list_videos | Get all video records and the incident counts |
 | update_video | Change one video record |
+| reconcile_interrupted_videos | Reset videos left in the "processing" status by a stopped server to the "failed" status |
 | create_incident | Insert an incident record |
 | get_incident | Get one incident record |
 | list_incidents | Get the incident records, with filters |
@@ -134,12 +135,16 @@ A new waste track is skipped when one of these conditions is true:
 
 The third condition is important. A waste object that is visible at the start of the video is pre-existing litter. It is not an event.
 
+The engine can cancel the skip for a carried object. A skipped object can stay near a person and move with the person. This means the person carries the object into the scene. The object is not pre-existing litter. The engine removes the skip flag. The object can then fire an event when the person drops it and moves away. This rule also applies to an object that is born near the frame edge but moves with a person who enters the scene.
+
 ### 4.5 The association (N)
 
 The engine tries to find a person near the waste object. A person is a candidate when:
 
 - The person was seen in the last PERSON_NEAR_WINDOW frames.
 - The distance from the person to the object is less than PROXIMITY_RADIUS.
+
+The engine measures the distance from the object center to the nearest point on the person box. It does not measure the center-to-center distance. This is a box-aware distance. It gives a small distance when a person holds the object at the edge of the person box. A center-to-center distance would be too large in this case.
 
 The engine selects the nearest person. It stores the person id and the birth distance.
 
@@ -197,6 +202,25 @@ Each event has these fields:
 ### 4.10 The expiry
 
 The engine removes a person track that was not seen for more than PERSON_EXPIRE frames. It removes a waste track that was not seen for more than WASTE_EXPIRE frames.
+
+### 4.11 The track stitching (Re-ID)
+
+The tracker can lose an object for a few frames. This happens with a detection flicker or an occlusion. When the object comes back, the tracker can give it a new identity number. Without a fix, the engine treats the new number as a new object. It loses the association, the birth location, and the stationary count.
+
+The engine solves this with track stitching. The engine keeps a short memory of the lost tracks. When a new track appears, the engine tries to reconnect it to a lost track:
+
+- For a waste object, the engine reconnects the new track when it is within WASTE_RECONNECT_DIST pixels of the lost track and within WASTE_RECONNECT_WINDOW frames.
+- For a person, the engine reconnects the new track when it is within PERSON_RECONNECT_DIST pixels of the lost track and within PERSON_RECONNECT_WINDOW frames.
+
+For a waste object, the reconnected track keeps its history. This includes the person association, the birth location, and the stationary count. For a person, the engine keeps an alias map. The alias map links the new person id to the first person id. The distance check for the rule M then uses the correct person.
+
+### 4.12 The off-camera departure
+
+A person can drop an object and then leave the frame. In this case, the engine has no current position for the person. The engine uses the last known position of the person for the rule M. This lets the event fire when the person is no longer visible.
+
+### 4.13 The active associations
+
+The engine has a function get_active_associations. The function returns the current list of (waste id, person id) pairs. The webcam handler uses this list to show the live associations on the screen.
 
 ## 5. The pipeline (pipeline.py)
 
@@ -299,7 +323,7 @@ A video can be in the queue two times. For example, the upload adds the video, a
 - If the status is "processing", the worker skips the video.
 - If the status is "completed", the worker skips the video.
 
-This prevents the duplicate incidents.
+This prevents the duplicate incidents. Because the worker skips a "processing" video, a video that a stopped server left in the "processing" status would stay stuck. The start-up recovery step (section 8) prevents this. It resets such a video to the "failed" status, so the operator can re-run it.
 
 ### 6.3 The model load
 
@@ -308,6 +332,17 @@ The worker loads the model on the first job. The load happens in the worker thre
 ### 6.4 The status changes
 
 The worker sets the video status to "processing" before the job. On success, the pipeline sets the status to "completed". On failure, the worker sets the status to "failed" and stores the error message.
+
+### 6.5 The live updates
+
+The worker sends messages to the dashboard over the WebSocket. It sends a message at these times:
+
+- When a video enters the queue.
+- When the job starts.
+- While the job runs, with the progress values.
+- When the job ends with success or failure.
+
+The worker uses the WebSocket manager to send the messages. The dashboard listens on the /ws/events path. The dashboard updates the queue and the progress bar in real time. The operator does not refresh the page.
 
 ## 7. The API routers
 
@@ -359,99 +394,137 @@ The valid review statuses are:
 - confirmed
 - false_alarm
 
+### 7.3 The webcam router (routers/webcam.py)
+
+The webcam router has one WebSocket endpoint at the /ws/webcam path. For each frame from the browser the router does these steps:
+
+1. Receive one frame. A binary message is a raw JPEG frame. A text message is the older JSON form with a base64 image.
+2. Decode the image.
+3. Run the detector, the tracker, and the event engine on the frame.
+4. Build the reply.
+5. Send the reply back to the browser.
+
+The router runs step 2 to step 4 in a worker thread. It uses the asyncio.to_thread function for this work. The single server event loop therefore stays free while the model runs. This is the main performance change.
+
+The router speaks two reply protocols. The protocol depends on the request:
+
+| Request | Reply | Use |
+| --- | --- | --- |
+| Binary JPEG frame | Metadata only: the boxes, the track numbers, the associations, and the events. No image. | The current dashboard. The browser draws the boxes on the video. |
+| JSON with a base64 image | An annotated JPEG image, plus the same metadata. | The older dashboard build. |
+
+The metadata protocol is the faster one. The server does not draw or re-encode an image. The browser draws the boxes on a canvas over the local video. The two protocols share the same detection code. The size guard drops any frame larger than 4 MB.
+
+The router uses a dedicated detector. This detector is separate from the background worker's detector. The two never share one model or one tracker. A video job and a live camera can therefore run at the same time without a track-number conflict. The router serves one webcam session at a time. It rejects a second session with an error message.
+
+The webcam router does not save incidents to the database. It shows the results on the screen only.
+
 ## 8. The main application (main.py)
 
 The file backend/app/main.py creates the FastAPI application.
 
 The application uses a lifespan function. The function runs at the start and at the stop of the server:
 
-- At the start: create the tables, start the worker.
+- At the start: prepare the H.264 codec for the clips, create the tables, recover interrupted videos, give the WebSocket manager the event loop, and start the worker.
 - At the stop: stop the worker.
 
-The application registers these routes in this order:
+The recovery step handles a server that stopped during the processing. The worker processes one video at a time and always moves a video to the "completed" or the "failed" status when it finishes. So a video that still shows the "processing" status at the start was interrupted. The recovery step sets each such video to the "failed" status with a clear message. This step is important, because the worker skips a video that shows the "processing" status. Without the recovery, an interrupted video stays stuck and the Re-run button does not work on it.
 
-1. GET /api/health
-2. The video router at the /api prefix.
-3. The incident router at the /api prefix.
-4. The /media static mount.
-5. The / mount for the frontend.
+The application registers these routes:
 
-The order is important. The /api routes must come before the / mount. Otherwise the frontend mount would catch the API requests.
+1. GET /api/health, the health check.
+2. The /ws/events WebSocket, for the live updates.
+3. The video router at the /api prefix.
+4. The incident router at the /api prefix.
+5. The webcam router, which adds the /ws/webcam WebSocket.
+6. The /media static mount, for the media files.
+7. The / mount, for the built dashboard.
 
-## 9. The frontend (frontend/js/app.js)
+The order is important. The /api routes and the WebSocket routes must come before the / mount. If not, the frontend mount catches these requests.
 
-The dashboard is a single page. The JavaScript file controls all the behavior.
+The application also creates the WebSocket manager (services/websocket_manager.py). The manager keeps the list of the connected dashboards. The worker and the routers use the manager to send the live updates to all the connected dashboards.
 
-### 9.1 The views
+## 9. The frontend (frontend_app/)
 
-The page has three views:
+The dashboard is a single-page application. The project builds it with React, Vite, and Tailwind CSS. The source is in the frontend_app folder. The build command writes the static files to the frontend folder. The server serves the frontend folder.
 
-| View | Content |
+### 9.1 The tabs
+
+The dashboard has a sidebar and four tabs:
+
+| Tab | Content |
 | --- | --- |
-| Upload | The drop zone and the upload status |
-| Videos | The video list and the progress |
-| Incidents | The incident grid and the filters |
+| Upload Video | The drop zone and the upload status |
+| Videos & Output | The video list, the progress, and the output video |
+| Incident Review | The incident grid and the filters |
+| Real-Time Camera | The live webcam test |
 
-### 9.2 The polling
+### 9.2 The live updates
 
-The page refreshes the data every 2.5 seconds. This keeps the progress bar and the incident list up to date. The refresh uses two requests:
+The dashboard opens a WebSocket to the /ws/events path. The server sends the video status and the progress over this connection. The dashboard updates the video list and the progress bar in real time. The dashboard does not poll the server for the progress. The dashboard reads the full video list and the incident list from the /api endpoints when it needs them.
 
-- GET /api/videos
-- GET /api/incidents
+### 9.3 The upload tab
 
-### 9.3 The upload
+The operator drops a video on the drop zone or selects a file. The tab checks the file type and the file size in the browser. The tab sends the file with a FormData request to POST /api/videos. The tab shows an upload progress bar. The server queues the video for processing after the upload.
 
-The operator drops a video on the drop zone or selects a file. The page sends the file with a FormData request. After the upload, the page shows the video list.
+### 9.4 The videos and output tab
 
-### 9.4 The video list
+The video list is a table. It shows one row per video. Each row has:
 
-The video list shows one row per video. Each row has:
-
-- The video number and the file name.
+- The file name.
 - The status badge.
-- The progress bar and the frame count.
-- The duration and the frames per second.
+- The progress bar and the frame count, or the frames per second.
 - The incident count.
+- The upload time.
 - The action buttons.
 
 The action buttons depend on the status:
 
 | Status | Button |
 | --- | --- |
-| pending | Process |
-| processing | No button |
-| completed | View and Reprocess |
-| failed | Retry |
+| completed | Output and Re-run |
+| other | Re-run |
 
-### 9.5 The incident grid
+The Output button opens a modal. The modal plays the annotated output video. The modal has a download link for the video.
+
+### 9.5 The incident review tab
 
 The incident grid shows one card per incident. Each card has:
 
 - The snapshot image.
-- The incident number and the event time.
 - The review status badge.
-- The video file name and the confidence.
+- The confidence score.
+- The video file name and the event time.
 - The reason text.
+- The Confirm and False alarm buttons.
 
-The operator clicks a card to open the detail modal.
+The filter pills show all the incidents, or only the incidents of one review status. The review statuses are pending, confirmed, and false_alarm.
 
-### 9.6 The detail modal
+The operator clicks a card to open the detail modal. The modal shows:
 
-The detail modal shows:
+- The evidence clip. The clip plays in the browser.
+- The reason text.
+- The Confirm and False alarm buttons.
+- A download link for the clip.
 
-- The snapshot with the boxes.
-- The source video.
-- The evidence clip, with a download link.
-- The metadata table.
-- The review buttons.
+The review buttons send a PATCH request to the /api/incidents/{id} endpoint.
 
-The "Jump to event time" button moves the source video to the event time. This helps the operator check the event.
+### 9.6 The real-time camera tab
 
-The review buttons send a PATCH request. The buttons are:
+The Real-Time Camera tab tests the model with the webcam. The tab does these steps:
 
-- Confirm.
-- False alarm.
-- Mark pending.
+1. Ask the browser for permission to use the webcam.
+2. Open a WebSocket to the /ws/webcam path.
+3. Send each frame to the server as a binary JPEG image.
+4. Wait for the reply before it sends the next frame. This pacing stops a frame backlog.
+5. Draw the boxes and the labels on a canvas over the live video. The canvas uses the metadata from the reply.
+6. Show the live metrics: the stream frames per second, the inference time, the active associations, and the count of the live incidents.
+
+The tab shows the local video directly. The server does not send the video image back. The tab draws only the boxes. This method lowers the network load and makes the stream feel real-time.
+
+The tab reconnects on its own if the WebSocket closes. It uses a growing delay between the attempts. A click on Stop Stream ends the session and stops the reconnect.
+
+The webcam tab does not save the incidents. It shows the results on the screen only.
 
 ## 10. The scripts
 

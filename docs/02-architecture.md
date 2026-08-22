@@ -5,39 +5,46 @@
 This diagram shows the main parts of the system and how they connect.
 
 ```text
-+------------------+      +----------------------------+
-|   The dashboard  | <->  |   The FastAPI backend      |
-|   (web browser)  |      |   (the server)             |
-+------------------+      +----------------------------+
-        |                          |            |
-        |  HTTP /api/*             |            |
-        +--------------------------+            |
-                                   |            |
-                          +--------v--------+   |
-                          |  The worker     |   |
-                          |  thread         |   |
-                          +--------+--------+   |
-                                   |            |
-                          +--------v--------+   |
-                          |  The pipeline   |   |
-                          +--------+--------+   |
-                                   |            |
-              +--------------------+------------v----------+
-              |  The detector + the tracker (YOLO + ByteTrack) |
-              +-------------------------------------------------+
-                                   |
-                          +--------v--------+
-                          |  The event      |
-                          |  engine (rules) |
-                          +--------+--------+
-                                   |
-              +--------------------+--------------------+
-              |                                         |
-     +--------v--------+                       +--------v--------+
-     |  The database   |                       |  The media      |
-     |  (SQLite)       |                       |  storage        |
-     +-----------------+                       +-----------------+
+                      HTTP /api/*  (upload, list, review)
+  +------------------+  static files (/ and /media)  +--------------------------+
+  |  The dashboard   | <===========================> |  The FastAPI backend     |
+  |  (React, in the  |                                |  (the server)            |
+  |   web browser)   | <===========================> |                          |
+  +------------------+  WebSocket                     +------------+-------------+
+                        /ws/events (live updates)          |       |
+                        /ws/webcam (live frames)           |       |
+                                                           |       |
+                   queue (uploaded videos)                 |       | live frames
+                         +---------------------------------+       |
+                         |                                         |
+                +--------v--------+                       +--------v--------+
+                |  The worker     |                       |  The webcam     |
+                |  thread         |                       |  handler        |
+                +--------+--------+                       +--------+--------+
+                         |                                         |
+                +--------v--------+                                |
+                |  The pipeline   |                                |
+                +--------+--------+                                |
+                         |                                         |
+            +------------v-----------------------------+          |
+            |  The detector + the tracker              | <--------+
+            |  (YOLO + ByteTrack)                      |
+            +--------------------+---------------------+
+                                 |
+                        +--------v--------+
+                        |  The event      |
+                        |  engine (rules) |
+                        +--------+--------+
+                                 |
+            +--------------------+--------------------+
+            |                                         |
+   +--------v--------+                       +--------v--------+
+   |  The database   |                       |  The media      |
+   |  (SQLite)       |                       |  storage        |
+   +-----------------+                       +-----------------+
 ```
+
+The system has two processing paths. The upload path uses the queue, the worker thread, and the pipeline. This path saves incidents to the database and the media storage. The webcam path uses the webcam handler. This path runs the same detector, tracker, and event engine in real time. The webcam path does not save incidents. It shows the results on the screen only.
 
 ## 2. The layers of the system
 
@@ -45,8 +52,8 @@ The system has three layers:
 
 | Layer | Content | Example |
 | --- | --- | --- |
-| The presentation layer | The dashboard | index.html, style.css, app.js |
-| The application layer | The API and the logic | The routers, the worker, the pipeline |
+| The presentation layer | The dashboard | The React app in frontend_app, built into frontend |
+| The application layer | The API and the logic | The routers, the worker, the pipeline, the WebSocket manager |
 | The data layer | The storage | The database, the media files |
 
 ## 3. The data flow
@@ -68,16 +75,31 @@ The flow has two main stages: the upload stage and the processing stage.
 1. The worker thread takes the video id from the queue.
 2. The worker checks the video status. If the video is already processing or completed, the worker skips it.
 3. The worker sets the video status to "processing".
-4. The worker loads the model on the first job.
-5. The pipeline opens the video file.
-6. The pipeline reads the frames one by one.
-7. The pipeline runs the detector and the tracker on each frame.
-8. The pipeline sends the detections to the event engine.
-9. The event engine returns the new events.
-10. The pipeline saves a snapshot and a clip for each event.
-11. The pipeline inserts the incident records in the database.
-12. The pipeline sets the video status to "completed".
-13. The dashboard shows the result.
+4. The worker sends a "processing" update to the dashboard over the WebSocket.
+5. The worker loads the model on the first job.
+6. The pipeline opens the video file.
+7. The pipeline reads the frames one by one.
+8. The pipeline runs the detector and the tracker on each frame.
+9. The pipeline sends the detections to the event engine.
+10. The event engine returns the new events.
+11. The pipeline saves a snapshot and a clip for each event.
+12. The pipeline inserts the incident records in the database.
+13. The worker sends progress updates to the dashboard over the WebSocket while it works.
+14. The pipeline sets the video status to "completed".
+15. The worker sends a "completed" update to the dashboard over the WebSocket.
+16. The dashboard shows the result. The dashboard updates in real time. The operator does not refresh the page.
+
+### 3.3 The webcam stage
+
+1. The operator opens the Real-Time Camera tab in the dashboard.
+2. The browser asks for permission to use the webcam.
+3. The browser opens a WebSocket to the /ws/webcam path.
+4. The browser sends each frame to the server as a compressed image.
+5. The webcam handler runs the detector, the tracker, and the event engine on the frame.
+6. The webcam handler sends the annotated frame back to the browser.
+7. The webcam handler also sends the inference time and the active associations.
+8. The dashboard shows the annotated frame and the live metrics.
+9. The server does not save the webcam frames or the webcam incidents.
 
 ## 4. The folder structure
 
@@ -90,36 +112,44 @@ litter-detector/
 |-- requirements-dev.txt
 |-- .env.example
 |-- README.md
-|-- docs/                    The documentation
+|-- docs/                        The documentation
 |-- backend/
 |   |-- app/
-|   |   |-- main.py          The FastAPI application
-|   |   |-- config.py        The settings
-|   |   |-- db.py            The database layer
-|   |   |-- schemas.py       The request models
-|   |   |-- utils.py         The small helpers
+|   |   |-- main.py              The FastAPI application
+|   |   |-- config.py            The settings
+|   |   |-- db.py                The database layer
+|   |   |-- schemas.py           The request models
+|   |   |-- utils.py             The small helpers
 |   |   |-- routers/
-|   |   |   |-- videos.py    The video endpoints
-|   |   |   |-- incidents.py The incident endpoints
+|   |   |   |-- videos.py        The video endpoints
+|   |   |   |-- incidents.py     The incident endpoints
+|   |   |   |-- webcam.py        The webcam WebSocket endpoint
 |   |   |-- services/
-|   |   |   |-- worker.py    The background thread
-|   |   |   |-- pipeline.py  The video processing
+|   |   |   |-- worker.py        The background thread
+|   |   |   |-- pipeline.py      The video processing
 |   |   |   |-- event_engine.py  The rules
-|   |   |-- data/            The database files
-|   |   |-- storage/         The media files
+|   |   |   |-- websocket_manager.py  The WebSocket connections
+|   |   |-- data/                The database files
+|   |   |-- storage/             The media files
 |-- ml/
-|   |-- detector.py          The YOLO wrapper
-|-- frontend/
-|   |-- index.html
-|   |-- css/style.css
-|   |-- js/app.js
+|   |-- detector.py              The YOLO wrapper
+|   |-- bytetrack_custom.yaml    The tracker settings
+|-- frontend_app/                The dashboard source (React)
+|   |-- src/
+|   |   |-- App.jsx              The main component
+|   |   |-- components/          The tab components
+|   |-- package.json            The Node dependencies
+|   |-- vite.config.js          The build settings
+|-- frontend/                    The built dashboard (the server serves this)
+|-- notebooks/                   The training notebooks
 |-- scripts/
-|   |-- evaluate.py          The validation script
-|   |-- make_sample_video.py The smoke test video
+|   |-- evaluate.py              The validation script
+|   |-- make_sample_video.py     The smoke test video
 |-- tests/
-|   |-- test_event_engine.py The unit tests
+|   |-- test_event_engine.py     The unit tests
 |-- data/
-|   |-- test_videos/         The test videos
+|   |-- test_videos/             The test videos
+|   |-- eval_results.json        The evaluation results
 |   |-- ground_truth.csv.example
 ```
 

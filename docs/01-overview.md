@@ -11,10 +11,10 @@ The system detects suspected littering incidents from video. When the system det
 The system accepts these inputs:
 
 - Uploaded video files.
-- Video from a webcam (planned for a future version).
+- Video from a webcam, for real-time testing.
 - Video from an IP camera (planned for a future version).
 
-The current version uses uploaded video files. The uploaded video is the main input for the minor project demo.
+The uploaded video is the main input for the minor project demo. The system stores the incidents that it finds in an uploaded video. The webcam input runs the same detection in real time in the browser. The system shows the webcam results on the screen only. The system does not save webcam incidents to the database.
 
 ## 3. The main parts of the system
 
@@ -54,16 +54,19 @@ The backend is a FastAPI application. It has these tasks:
 - Queue the videos for processing.
 - Store the incidents in a database.
 - Serve the dashboard and the media files.
+- Send live updates to the dashboard over a WebSocket.
+- Run real-time detection on webcam frames.
 
 ### 3.5 The dashboard
 
-The dashboard is a web page. The operator uses the dashboard to:
+The dashboard is a single-page web application. The project builds it with React. The operator uses the dashboard to:
 
 - Upload videos.
-- Watch the processing status.
+- Watch the processing status in real time.
 - View the list of incidents.
 - Review each incident.
 - Mark an incident as confirmed or as a false alarm.
+- Test the model in real time with the webcam.
 
 ## 4. The data decision
 
@@ -82,6 +85,7 @@ The system produces these outputs:
 
 - Detected persons and waste objects with bounding boxes.
 - An annotated preview video for each processed video.
+- A real-time annotated webcam stream.
 - Incidents with a snapshot, a clip, a timestamp, and a confidence score.
 - A review dashboard.
 - Evaluation results, such as detection accuracy, false alarm rate, processing speed, and detection delay.
@@ -114,7 +118,7 @@ The system produces these outputs:
 
 The current version does not do these tasks:
 
-- Process a live webcam feed.
+- Save incidents from the webcam to the database. The webcam is for real-time testing only.
 - Process a live IP camera feed.
 - Log in users or control access.
 - Run in the cloud.

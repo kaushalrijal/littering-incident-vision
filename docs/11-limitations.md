@@ -36,7 +36,7 @@ The system assumes a fixed camera. A moving camera changes all the positions. Th
 
 ### 4.1 The track identity change
 
-The tracker can give a new identity number to a person who leaves and re-enters the frame. The event engine keeps the old association. The event can be missed in this case.
+The tracker can give a new identity number to a person or a waste object that leaves and re-enters the frame. The event engine reduces this problem with track stitching. The event engine keeps a short memory of the lost tracks. It reconnects a new track to a lost track when the position and the time match. This mitigation works for a short gap. A long gap or a large position jump can still break the association. The event can be missed in this case.
 
 ### 4.2 The tracker warm-up
 
@@ -74,7 +74,7 @@ The OpenCV video writer may use the mp4v codec. Some browsers cannot play this c
 
 ### 6.3 The input types
 
-The current version accepts uploaded video files only. The live webcam and the IP camera are planned. They are not implemented.
+The current version accepts uploaded video files and a live webcam. The webcam runs in real time in the browser. The webcam path does not save the events to the database. It is for a live test only. The IP camera input is planned. It is not implemented.
 
 ### 6.4 The access control
 
@@ -84,7 +84,7 @@ The system has no login and no access control. Anyone with the network access ca
 
 The future work can remove some limits:
 
-- Add the live webcam input.
+- Save the webcam events to the database.
 - Add the live IP camera input.
 - Train a custom model on TACO with more classes.
 - Add a trained action classifier.

@@ -1,6 +1,28 @@
-# Ground truth for evaluation. Copy this file to data/ground_truth.csv and
-# fill in one row per test video placed in data/test_videos/.
-# expected_incidents: 1 = an event should be detected, 0 = no event should fire.
-video,expected_incidents
-test_01.mp4,1
-test_02.mp4,0
+# Ground truth for SYSTEM-LEVEL evaluation of the littering event detector.
+#
+# Copy this file to data/ground_truth.csv and add one row per test video
+# placed in data/test_videos/. Then run:
+#
+#     python scripts/evaluate.py --model ml/weights/best.pt --waste-classes trash
+#
+# Columns (order is free; matched by header name; extra columns are ignored):
+#   video             file name inside data/test_videos/            [required]
+#   expected_incidents 1 = a littering event SHOULD fire,           [required]
+#                      0 = NO event should fire
+#   scenario          short label shown in the report table         [optional]
+#   event_time_s      seconds into the clip when the drop happens;   [optional]
+#                     enables the detection-delay metric on true-positive clips
+#   notes             free text for your own reference (ignored)     [optional]
+#
+# Lines starting with '#' and blank lines are ignored. Aim for a balanced set
+# (see data/test_videos/README.md): roughly half positive (expected 1) and
+# half negative (expected 0), covering the scenarios below.
+video,expected_incidents,scenario,event_time_s,notes
+drop_and_leave_01.mp4,1,drop+leave,4.5,person sets a bottle down and walks away
+drop_and_leave_02.mp4,1,drop+leave,6.2,person tosses a cup and leaves the frame
+drop_and_leave_03.mp4,1,drop+leave,,drop time not labelled (delay not measured)
+walk_past_litter_01.mp4,0,walk-past,,litter already on the ground before the clip starts
+walk_past_litter_02.mp4,0,walk-past,,person walks near pre-existing trash but drops nothing
+carry_and_keep_01.mp4,0,carry+keep,,person carries a bottle the whole clip and keeps it
+crowd_no_drop_01.mp4,0,crowd,,several people, nobody litters
+person_only_01.mp4,0,person-only,,people present, no waste objects at all

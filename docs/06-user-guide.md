@@ -16,13 +16,14 @@ The dashboard opens on the Upload tab.
 
 ## 2. The tabs
 
-The dashboard has three tabs:
+The dashboard has four tabs:
 
 | Tab | Content |
 | --- | --- |
-| Upload | The drop zone for the videos |
-| Videos | The video list and the progress |
-| Incidents | The incident list |
+| Upload Video | The drop zone for the videos |
+| Videos & Output | The video list, the progress, and the output video |
+| Incident Review | The incident list |
+| Real-Time Camera | The live webcam test |
 
 The operator clicks a tab to open it.
 
@@ -44,9 +45,9 @@ The supported file types are:
 - webm
 - m4v
 
-The upload starts immediately. The page shows the upload status below the drop zone.
+The upload starts immediately. The page shows the upload status below the drop zone. The page shows an upload progress bar during the upload.
 
-After the upload, the page opens the Videos tab. The new video has the status "pending". The processing starts automatically.
+After the upload, the page opens the Videos & Output tab. The new video has the status "pending". The processing starts automatically.
 
 ### 3.1 The upload problems
 
@@ -60,7 +61,7 @@ The page shows the error message.
 
 ## 4. The video list
 
-The Videos tab shows one row per video.
+The Videos & Output tab shows one row per video.
 
 ### 4.1 The status badges
 
@@ -73,7 +74,7 @@ The video status has four values:
 | completed | The processing finished |
 | failed | The processing failed |
 
-The page shows the progress bar for the videos in processing. The progress bar shows the processed frame count and the total frame count.
+The page shows the progress bar for the videos in processing. The progress bar shows the processed frame count and the total frame count. The progress bar updates in real time over the WebSocket. The operator does not refresh the page.
 
 ### 4.2 The action buttons
 
@@ -81,30 +82,28 @@ The buttons depend on the status:
 
 | Status | Button | Result |
 | --- | --- | --- |
-| pending | Process | Queue the video again |
-| completed | View | Open the incidents of the video |
-| completed | Reprocess | Delete the incidents and process again |
-| failed | Retry | Queue the video again |
+| completed | Output | Open a modal that plays the annotated output video |
+| any status | Re-run | Delete the incidents and process the video again |
 
-The failed row shows the error message under the status badge.
+A failed video shows the Failed badge. The terminal log shows the error message of a failed video.
 
 ## 5. The incident list
 
-The Incidents tab shows one card per incident.
+The Incident Review tab shows one card per incident.
 
 Each card has:
 
 - The snapshot image.
-- The incident number.
-- The event time.
 - The review status badge.
-- The video file name.
 - The confidence score.
+- The video file name.
+- The event time.
 - The reason text.
+- The Confirm and False alarm buttons.
 
 ### 5.1 The filters
 
-The filters are above the list:
+The filter pills are above the list:
 
 | Filter | Result |
 | --- | --- |
@@ -113,9 +112,7 @@ The filters are above the list:
 | Confirmed | Show only the confirmed incidents |
 | False alarm | Show only the false alarm incidents |
 
-The operator clicks a filter to use it.
-
-When the operator clicks "View" on a video row, the page shows only the incidents of that video. A chip above the list shows the video number. The operator clicks the chip to remove the filter.
+The operator clicks a filter pill to use it.
 
 ## 6. The incident review
 
@@ -125,38 +122,21 @@ When the operator clicks "View" on a video row, the page shows only the incident
 
 The modal shows:
 
-- The snapshot with the detected boxes.
-- The source video.
-- The evidence clip.
-- The metadata table.
+- The evidence clip. The clip plays in the browser.
+- The reason text.
 - The review buttons.
+- A download link for the clip.
 
-### 6.1 The metadata
+### 6.1 The evidence clip
 
-The metadata table shows:
+The evidence clip is a short video around the event time. The clip starts before the event and ends after the event. The operator plays the clip to check the event. The operator can save the clip with the download link.
 
-| Item | Content |
-| --- | --- |
-| Video | The video number and the file name |
-| Event time | The event time in the video |
-| Confidence | The confidence score in percent |
-| Waste class | The detected class name |
-| Track ID | The object identity number |
-| Reason | The text that explains the event |
-| Review status | The current status |
-| Recorded | The creation time |
-
-### 6.2 The jump button
-
-The "Jump to event time" button moves the source video to the event time. This lets the operator check the event in the source footage.
-
-### 6.3 The review buttons
+### 6.2 The review buttons
 
 | Button | Result |
 | --- | --- |
 | Confirm | Set the status to confirmed |
 | False alarm | Set the status to false_alarm |
-| Mark pending | Set the status to pending |
 
 The page updates the status after the click.
 
@@ -167,13 +147,15 @@ This flow works well for a live demo:
 1. Prepare two or three test videos in advance.
 2. Start the server.
 3. Upload the first video.
-4. Show the progress bar on the Videos tab.
-5. Open the Incidents tab.
-6. Click an incident.
-7. Show the snapshot and the clip.
-8. Use the jump button to show the event in the source video.
+4. Show the progress bar on the Videos & Output tab.
+5. Open the Incident Review tab.
+6. Click an incident card.
+7. Play the evidence clip in the modal.
+8. Read the reason text that explains the event.
 9. Mark the incident as confirmed.
 10. Show a false alarm example and mark it as false_alarm.
+
+The Real-Time Camera tab gives a second demo option. The operator starts the webcam and drops an object to show a live detection.
 
 The system does not need the internet during the demo, after the model download.
 

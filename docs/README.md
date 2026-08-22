@@ -59,6 +59,9 @@ The main rules that this documentation follows are:
 | record | One row in the database |
 | status | The state of a video or an incident |
 | review | To examine an incident and mark its result |
+| the webcam | The live camera that the browser reads |
+| association | A link between a waste object and a person |
+| WebSocket | A live two-way connection between the browser and the server |
 
 ## How to find more information
 

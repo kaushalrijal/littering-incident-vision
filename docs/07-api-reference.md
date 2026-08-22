@@ -23,6 +23,13 @@ The server address is http://127.0.0.1:8000 by default.
 | GET | /api/incidents/{id} | Get one incident |
 | PATCH | /api/incidents/{id} | Change the review status |
 
+The system also has two WebSocket endpoints. These endpoints do not use the /api prefix.
+
+| Path | Purpose |
+| --- | --- |
+| /ws/events | Push the live status and progress updates to the dashboard |
+| /ws/webcam | Run the live webcam detection |
+
 The system also serves these static paths:
 
 | Path | Content |
@@ -206,7 +213,63 @@ The error responses:
 | 404 | The incident does not exist |
 | 422 | The status value is not valid |
 
-## 11. The media files
+## 11. The WebSocket endpoints
+
+The system has two WebSocket endpoints. These endpoints give real-time updates. They do not use the /api prefix.
+
+### 11.1 /ws/events
+
+The dashboard opens this WebSocket at the start. The server pushes messages to the dashboard. The client does not send messages.
+
+The server sends two message types.
+
+The first type is the status message. The server sends it when the video status changes.
+
+```json
+{"type": "video_status", "video_id": 3, "status": "processing"}
+```
+
+The status field has one of these values: pending, processing, completed, or failed. The completed message adds a "stats" object. The failed message adds an "error" string.
+
+The second type is the progress message. The server sends it many times during the processing.
+
+```json
+{"type": "video_progress", "video_id": 3, "stats": {"processed_frames": 120, "total_frames": 900, "detected_incidents": 2}}
+```
+
+The dashboard uses the progress message to update the progress bar. The dashboard uses the status message to refresh the video list and the incident list.
+
+### 11.2 /ws/webcam
+
+The Real-Time Camera tab opens this WebSocket. The browser sends the camera frames. The server returns the annotated frames.
+
+The browser sends this message for each frame. The browser sends up to 20 frames per second.
+
+```json
+{"image": "data:image/jpeg;base64,...", "timestamp_ms": 1699999999999}
+```
+
+The image field holds one JPEG frame in base64 form. The server reads the image field. The server does not use the timestamp_ms field.
+
+The server returns this message for each frame:
+
+```json
+{"type": "webcam_frame", "image": "data:image/jpeg;base64,...", "frame_idx": 42, "inference_ms": 38.5, "associations": [[7, 3]], "events": []}
+```
+
+The response fields have this content:
+
+| Field | Content |
+| --- | --- |
+| image | The annotated frame in base64 form |
+| frame_idx | The frame number in this session |
+| inference_ms | The frame processing time in milliseconds |
+| associations | The active links, as pairs of [waste track number, person track number] |
+| events | The new littering events in this frame |
+
+The server does not save the webcam frames. The server does not save the webcam events in the database. The webcam path is for a live demonstration only.
+
+## 12. The media files
 
 The /media path serves the stored files. The file paths come from the database.
 

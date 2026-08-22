@@ -6,3 +6,5 @@ backend/storage/snapshots/**/*.jpg
 /backend/data/*.db
 backend/data/litter.db
 .venv/
+.pytest_cache/
+*.dll

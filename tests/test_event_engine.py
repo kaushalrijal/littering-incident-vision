@@ -241,10 +241,15 @@ def test_off_camera_person_departure():
 
 
 def test_get_active_associations():
-    """Verify that get_active_associations returns [(waste_id, person_id)] for debugging UI HUD rendering."""
+    """Verify that get_active_associations returns [(waste_id, person_id)] once a track is confirmed."""
     engine = make_engine()
     engine.process_frame(6, 200, [person(10, 100, 90, 130, 120)], [])
     engine.process_frame(7, 233, [person(10, 100, 90, 130, 120)], [waste(12, 110, 100, 140, 130)])
+    # Only 1 sighting so far: unconfirmed -> must NOT appear in the HUD.
+    assert engine.get_active_associations() == []
+    engine.process_frame(8, 266, [person(10, 100, 90, 130, 120)], [waste(12, 110, 100, 140, 130)])
+    assert engine.get_active_associations() == []  # still unconfirmed (2 < confirm_frames=3)
+    engine.process_frame(9, 299, [person(10, 100, 90, 130, 120)], [waste(12, 110, 100, 140, 130)])
 
     assocs = engine.get_active_associations()
     assert assocs == [(12, 10)], f"expected [(12, 10)], got {assocs}"
@@ -257,7 +262,8 @@ def test_box_aware_hand_held_trash_association():
     # Trash box: (210, 280, 240, 310) -> trash center (225, 295)
     # Center-to-center dist: sqrt((225-150)^2 + (295-200)^2) = sqrt(75^2 + 95^2) = 121.0px
     # Point-to-box dist: dx = 225 - 200 = 25px, dy = 0px -> 25px!
-    engine.process_frame(6, 200, [person(10, 100, 50, 200, 350)], [waste(12, 210, 280, 240, 310)])
+    for idx in (6, 7, 8):  # confirm_frames=3 sightings required for the HUD
+        engine.process_frame(idx, 200 + 33 * idx, [person(10, 100, 50, 200, 350)], [waste(12, 210, 280, 240, 310)])
 
     assocs = engine.get_active_associations()
     assert assocs == [(12, 10)], f"expected [(12, 10)], got {assocs}"
@@ -281,12 +287,85 @@ def test_carried_trash_entrance_not_skipped():
             return [waste(50, 245, 100, 275, 130)]  # person drops trash at 245 and continues walking to 475!
         return []
 
+    events = run_frames(engine, 40, persons, wastes)
+
+    assert len(events) == 1, f"expected 1 event for carried-in dropped trash, got {len(events)}"
+    ev = events[0]
+    assert ev["track_id"] == 50
+    assert ev["class_name"] == "bottle"
+
+
+def test_brief_flicker_noise_never_associates_or_fires():
+    """Noise: trash detected for only 2 frames near a person must not show in the HUD nor fire an event."""
+    engine = make_engine()
+
+    def persons(idx):
+        if idx < 20:
+            x = 100 + idx * 12
+            return [person(1, x, 90, x + 30, 120)]  # person walks past the noise spot
+        return []
+
+    def wastes(idx):
+        if idx in (6, 7):  # brief low-conf blip near the person's path
+            return [{"track_id": 50, "class_name": "bottle", "bbox": (110 + idx * 12, 100, 140 + idx * 12, 130), "conf": 0.35}]
+        return []
+
+    events = run_frames(engine, 40, persons, wastes)
+
+    assert events == [], f"flicker noise fired events: {events}"
+    assert engine.get_active_associations() == []
+
+
+def test_sparse_stitched_noise_blocked_by_hit_ratio():
+    """Flicker recurring ~1/3 of frames at one spot accumulates sightings but must fail the consistency gate."""
+    engine = make_engine()
+
+    def persons(idx):
+        if idx < 20:
+            x = 100 + min(idx, 15) * 12
+            return [person(1, x, 90, x + 30, 120)]
+        return []
+
+    def wastes(idx):
+        if idx >= 6 and idx % 3 == 0:
+            # Same spot, same track id: sparse detections that stitching keeps alive.
+            return [waste(50, 112, 101, 142, 131)]
+        return []
+
+    events = run_frames(engine, 45, persons, wastes)
+
+    assert len(events) == 0, f"sparse flicker fired events: {events}"
+
+
+def test_low_mean_confidence_track_never_fires():
+    """A consistently seen but weakly-confident track must not fire."""
+    engine = make_engine()
+
+    def persons(idx):
+        if idx < 20:
+            x = 100 + min(idx, 15) * 12
+            return [person(1, x, 90, x + 30, 120)]
+        return []
+
+    def wastes(idx):
+        if idx >= 5:
+            low = waste(50, 110, 100, 140, 130)
+            low["conf"] = 0.32  # persistent but below WASTE_MIN_CONF
+            return [low]
+        return []
+
+    events = run_frames(engine, 40, persons, wastes)
+
+    assert events == [], f"low-confidence track fired: {events}"
+
 def test_edge_entrance_carried_trash_association():
     """Trash born near the frame edge (x1 < edge_margin) carried by a person entering the screen associates successfully and is NOT skipped."""
     engine = make_engine()  # edge_margin = 20.0, ignore_first_frames = 5
     # Person box: (5, 90, 60, 300) -> entering from left edge (x1 = 5)
     # Trash box: (10, 200, 40, 230) -> trash inside lower portion of person box (x1 = 10 < edge_margin 20)
-    engine.process_frame(6, 200, [person(12, 5, 90, 60, 300)], [waste(13, 10, 200, 40, 230)])
+    # Born while a person is near -> not edge-skipped; confirm_frames=3 sightings for the HUD.
+    for idx in (6, 7, 8):
+        engine.process_frame(idx, 200 + 33 * idx, [person(12, 5, 90, 60, 300)], [waste(13, 10, 200, 40, 230)])
 
     assocs = engine.get_active_associations()
     assert assocs == [(13, 12)], f"expected [(13, 12)], got {assocs}"

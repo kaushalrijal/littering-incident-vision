@@ -5,6 +5,7 @@ import UploadTab from './components/UploadTab';
 import VideosTab from './components/VideosTab';
 import IncidentsTab from './components/IncidentsTab';
 import WebcamTab from './components/WebcamTab';
+import ReviewTab from './components/ReviewTab';
 
 const SECTION_META = {
   upload: {
@@ -18,6 +19,10 @@ const SECTION_META = {
   incidents: {
     title: 'Incident review',
     desc: 'Suspected littering events extracted by the rule engine.',
+  },
+  review: {
+    title: 'Review by video',
+    desc: 'Walk each video’s detected events and confirm or dismiss them.',
   },
   webcam: {
     title: 'Live camera',
@@ -35,10 +40,21 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   function fetchCounts() {
-    Promise.all([fetch('/api/videos'), fetch('/api/incidents')])
+    // Videos: pull up to 100 so dropdowns stay populated; totals come from
+    // the paginated envelopes the API now returns.
+    Promise.all([
+      fetch('/api/videos?page=1&page_size=100'),
+      fetch('/api/incidents?page=1&page_size=1'),
+    ])
       .then(async ([vRes, iRes]) => {
-        if (vRes.ok) setVideos(await vRes.json());
-        if (iRes.ok) setIncidentCount((await iRes.json()).length);
+        if (vRes.ok) {
+          const body = await vRes.json();
+          setVideos(body.items ?? []);
+        }
+        if (iRes.ok) {
+          const body = await iRes.json();
+          setIncidentCount(body.total ?? 0);
+        }
       })
       .catch((err) => console.error('Failed to fetch counts:', err));
   }
@@ -127,12 +143,11 @@ export default function App() {
           </section>
 
           {activeTab === 'upload' && <UploadTab onUploadSuccess={handleUploadSuccess} />}
-          {activeTab === 'videos' && (
-            <VideosTab videos={videos} liveStats={liveStats} refreshKey={refreshKey} />
-          )}
+          {activeTab === 'videos' && <VideosTab liveStats={liveStats} refreshKey={refreshKey} />}
           {activeTab === 'incidents' && (
             <IncidentsTab videos={videos} refreshKey={refreshKey} />
           )}
+          {activeTab === 'review' && <ReviewTab refreshKey={refreshKey} />}
           {activeTab === 'webcam' && <WebcamTab />}
         </div>
       </main>

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Play, X } from 'lucide-react';
+import Pagination from './Pagination';
 
 const STATUS_FILTERS = [
   { id: 'all', label: 'All' },
@@ -13,6 +14,15 @@ const SORTS = [
   { id: 'oldest', label: 'Oldest first' },
   { id: 'confidence', label: 'Confidence' },
   { id: 'timestamp', label: 'In-video time' },
+];
+
+const PAGE_SIZE = 12;
+
+const PERIODS = [
+  { id: 'all', label: 'All time' },
+  { id: '1', label: 'Today' },
+  { id: '7', label: '7 days' },
+  { id: '30', label: '30 days' },
 ];
 
 function StatusBadge({ status }) {
@@ -42,35 +52,49 @@ export default function IncidentsTab({ videos, refreshKey }) {
   const [status, setStatus] = useState('all');
   const [sort, setSort] = useState('newest');
   const [videoId, setVideoId] = useState('all');
+  const [days, setDays] = useState('all');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [minConfidence, setMinConfidence] = useState(0);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [selectedIncident, setSelectedIncident] = useState(null);
 
   useEffect(() => {
-    const t = setTimeout(() => setSearch(searchInput.trim()), 300);
+    const t = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(1);
+    }, 300);
     return () => clearTimeout(t);
   }, [searchInput]);
 
   useEffect(() => {
-    const params = new URLSearchParams();
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(PAGE_SIZE),
+    });
     if (sort !== 'newest') params.set('sort', sort);
     if (status !== 'all') params.set('status', status);
     if (videoId !== 'all') params.set('video_id', videoId);
+    if (days !== 'all') params.set('days', days);
     if (minConfidence > 0) params.set('min_confidence', minConfidence / 100);
     if (search) params.set('search', search);
 
     let cancelled = false;
     fetch(`/api/incidents?${params.toString()}`)
-      .then((res) => (res.ok ? res.json() : []))
+      .then(async (res) => (res.ok ? res.json() : { items: [], total: 0, total_pages: 1 }))
       .then((data) => {
-        if (!cancelled) setItems(data);
+        if (cancelled) return;
+        setItems(data.items ?? []);
+        setTotal(data.total ?? 0);
+        setTotalPages(data.total_pages ?? 1);
       })
       .catch((err) => console.error('Failed to fetch incidents:', err));
     return () => {
       cancelled = true;
     };
-  }, [status, sort, videoId, minConfidence, search, refreshKey]);
+  }, [status, sort, videoId, days, page, minConfidence, search, refreshKey]);
 
   useEffect(() => {
     if (!selectedIncident) return;
@@ -78,6 +102,11 @@ export default function IncidentsTab({ videos, refreshKey }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedIncident]);
+
+  const changeFilter = (setter) => (value) => {
+    setter(value);
+    setPage(1);
+  };
 
   const updateStatus = async (incidentId, reviewStatus) => {
     try {
@@ -88,9 +117,15 @@ export default function IncidentsTab({ videos, refreshKey }) {
       });
       if (res.ok) {
         const updated = await res.json();
-        setItems((prev) => prev.map((inc) => (inc.id === incidentId ? updated : inc)));
+        setItems((prev) =>
+          prev.map((inc) => {
+            if (inc.id !== incidentId) return inc;
+            // Keep fields the list endpoint enriches with (e.g. video_filename).
+            return { ...inc, ...updated };
+          })
+        );
         setSelectedIncident((prev) =>
-          prev && prev.id === incidentId ? updated : prev
+          prev && prev.id === incidentId ? { ...prev, ...updated } : prev
         );
       }
     } catch (err) {
@@ -106,13 +141,13 @@ export default function IncidentsTab({ videos, refreshKey }) {
             status === f.id ? (
               <button
                 key={f.id}
-                onClick={() => setStatus(f.id)}
+                onClick={() => changeFilter(setStatus)(f.id)}
                 className="chip chip-active"
               >
                 {f.label}
               </button>
             ) : (
-              <button key={f.id} onClick={() => setStatus(f.id)} className="chip">
+              <button key={f.id} onClick={() => changeFilter(setStatus)(f.id)} className="chip">
                 {f.label}
               </button>
             )
@@ -129,7 +164,7 @@ export default function IncidentsTab({ videos, refreshKey }) {
           />
           <select
             value={videoId}
-            onChange={(e) => setVideoId(e.target.value)}
+            onChange={(e) => changeFilter(setVideoId)(e.target.value)}
             className="field cursor-pointer sm:w-44"
           >
             <option value="all">All videos</option>
@@ -140,8 +175,19 @@ export default function IncidentsTab({ videos, refreshKey }) {
             ))}
           </select>
           <select
+            value={days}
+            onChange={(e) => changeFilter(setDays)(e.target.value)}
+            className="field cursor-pointer sm:w-36"
+          >
+            {PERIODS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <select
             value={sort}
-            onChange={(e) => setSort(e.target.value)}
+            onChange={(e) => changeFilter(setSort)(e.target.value)}
             className="field cursor-pointer sm:w-44"
           >
             {SORTS.map((s) => (
@@ -155,22 +201,25 @@ export default function IncidentsTab({ videos, refreshKey }) {
 
       <label className="flex flex-wrap items-center gap-3">
         <span className="label-micro">Min confidence</span>
-        <input
-          type="range"
-          min="0"
-          max="95"
-          step="5"
-          value={minConfidence}
-          onChange={(e) => setMinConfidence(Number(e.target.value))}
-          className="h-1 w-40 cursor-pointer appearance-none bg-border accent-[oklch(0.141_0.005_285.823)]"
-        />
+          <input
+            type="range"
+            min="0"
+            max="95"
+            step="5"
+            value={minConfidence}
+            onChange={(e) => {
+              setMinConfidence(Number(e.target.value));
+              setPage(1);
+            }}
+            className="h-1 w-40 cursor-pointer appearance-none bg-border accent-[oklch(0.141_0.005_285.823)]"
+          />
         <span className="w-9 font-mono text-[11px] font-bold tabular-nums">{minConfidence}%</span>
       </label>
 
       <div className="panel">
         <div className="panel-header">
           <p className="text-xs font-bold tracking-[0.08em] uppercase">Detected incidents</p>
-          <p className="font-mono text-[11px] text-muted-foreground">{items.length} SHOWN</p>
+          <p className="font-mono text-[11px] text-muted-foreground">{total} SHOWN</p>
         </div>
 
         {items.length === 0 ? (
@@ -259,6 +308,8 @@ export default function IncidentsTab({ videos, refreshKey }) {
             })}
           </div>
         )}
+
+        <Pagination currentPage={page} totalPages={totalPages} total={total} onPageChange={setPage} />
       </div>
 
       {selectedIncident && (

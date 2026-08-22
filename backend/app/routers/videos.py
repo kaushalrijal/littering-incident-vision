@@ -1,11 +1,12 @@
 """Video endpoints: upload, list, status, (re)process."""
 import logging
+import math
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from backend.app import db
 from backend.app.config import settings
-from backend.app.schemas import ProcessRequest
+from backend.app.schemas import PaginatedResponse, ProcessRequest
 from backend.app.services.worker import worker
 from backend.app.utils import is_allowed_video, safe_ext
 
@@ -61,13 +62,16 @@ async def upload_video(file: UploadFile = File(...)):
     return db.get_video(video_id)
 
 
-@router.get("")
+@router.get("", response_model=PaginatedResponse)
 def list_videos(
+    page: int = Query(default=1, ge=1, description="Page number"),
+    page_size: int = Query(default=10, ge=1, le=100, description="Items per page"),
     sort: str = Query(default="newest", description=f"One of: {', '.join(db.VIDEO_SORTS)}"),
     status: str | None = Query(default=None, description="Filter by processing status"),
     search: str | None = Query(default=None, description="Substring match on filename"),
+    days: int | None = Query(default=None, ge=1, le=365, description="Filter videos from last N days"),
 ):
-    """List uploaded videos with incident counts, sorted and filtered."""
+    """List uploaded videos with incident counts, sorted, filtered and paginated."""
     if sort not in db.VIDEO_SORTS:
         raise HTTPException(
             status_code=400,
@@ -78,7 +82,24 @@ def list_videos(
             status_code=400,
             detail=f"Invalid status. Allowed: {', '.join(db.VIDEO_STATUSES)}",
         )
-    return db.list_videos(sort=sort, status=status, search=search)
+    total = db.count_videos(status=status, search=search, days=days)
+    total_pages = max(1, math.ceil(total / page_size))
+    offset = (page - 1) * page_size
+    items = db.list_videos(
+        sort=sort,
+        status=status,
+        search=search,
+        days=days,
+        limit=page_size,
+        offset=offset,
+    )
+    return PaginatedResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
 
 
 @router.get("/{video_id}")

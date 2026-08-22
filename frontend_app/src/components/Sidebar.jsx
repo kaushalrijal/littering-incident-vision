@@ -4,6 +4,7 @@ const NAV_ITEMS = [
   { id: 'upload', path: '/', label: 'Upload' },
   { id: 'videos', path: '/videos', label: 'Videos', watch: 'processing' },
   { id: 'incidents', path: '/incidents', label: 'Incidents' },
+  { id: 'review', path: '/review', label: 'Review' },
   { id: 'live', path: '/live', label: 'Live camera' },
 ];
 

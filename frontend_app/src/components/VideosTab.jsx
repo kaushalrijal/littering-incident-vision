@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { RefreshCw, Eye, X } from 'lucide-react';
+import Pagination from './Pagination';
 
 const STATUS_FILTERS = [
   { id: 'all', label: 'All' },
@@ -14,6 +15,15 @@ const SORTS = [
   { id: 'oldest', label: 'Oldest first' },
   { id: 'name', label: 'Name A-Z' },
   { id: 'incidents', label: 'Most incidents' },
+];
+
+const PAGE_SIZE = 10;
+
+const PERIODS = [
+  { id: 'all', label: 'All time' },
+  { id: '1', label: 'Today' },
+  { id: '7', label: '7 days' },
+  { id: '30', label: '30 days' },
 ];
 
 function StatusBadge({ status }) {
@@ -45,36 +55,55 @@ function StatusBadge({ status }) {
   );
 }
 
-export default function VideosTab({ videos, liveStats, refreshKey }) {
+export default function VideosTab({ liveStats, refreshKey }) {
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState('all');
   const [sort, setSort] = useState('newest');
+  const [days, setDays] = useState('all');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [selectedVideo, setSelectedVideo] = useState(null);
 
   useEffect(() => {
-    const t = setTimeout(() => setSearch(searchInput.trim()), 300);
+    const t = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(1);
+    }, 300);
     return () => clearTimeout(t);
   }, [searchInput]);
 
   useEffect(() => {
-    const params = new URLSearchParams();
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(PAGE_SIZE),
+    });
     if (sort !== 'newest') params.set('sort', sort);
     if (status !== 'all') params.set('status', status);
+    if (days !== 'all') params.set('days', days);
     if (search) params.set('search', search);
 
     let cancelled = false;
     fetch(`/api/videos?${params.toString()}`)
-      .then((res) => (res.ok ? res.json() : []))
+      .then(async (res) => (res.ok ? res.json() : { items: [], total: 0, total_pages: 1 }))
       .then((data) => {
-        if (!cancelled) setItems(data);
+        if (cancelled) return;
+        setItems(data.items ?? []);
+        setTotal(data.total ?? 0);
+        setTotalPages(data.total_pages ?? 1);
       })
       .catch((err) => console.error('Failed to fetch videos:', err));
     return () => {
       cancelled = true;
     };
-  }, [status, sort, search, refreshKey]);
+  }, [status, sort, days, page, search, refreshKey]);
+
+  const changeFilter = (setter) => (value) => {
+    setter(value);
+    setPage(1);
+  };
 
   useEffect(() => {
     if (!selectedVideo) return;
@@ -103,13 +132,13 @@ export default function VideosTab({ videos, liveStats, refreshKey }) {
             status === f.id ? (
               <button
                 key={f.id}
-                onClick={() => setStatus(f.id)}
+                onClick={() => changeFilter(setStatus)(f.id)}
                 className="chip chip-active"
               >
                 {f.label}
               </button>
             ) : (
-              <button key={f.id} onClick={() => setStatus(f.id)} className="chip">
+              <button key={f.id} onClick={() => changeFilter(setStatus)(f.id)} className="chip">
                 {f.label}
               </button>
             )
@@ -125,8 +154,19 @@ export default function VideosTab({ videos, liveStats, refreshKey }) {
             className="field sm:w-56"
           />
           <select
+            value={days}
+            onChange={(e) => changeFilter(setDays)(e.target.value)}
+            className="field cursor-pointer sm:w-36"
+          >
+            {PERIODS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <select
             value={sort}
-            onChange={(e) => setSort(e.target.value)}
+            onChange={(e) => changeFilter(setSort)(e.target.value)}
             className="field cursor-pointer sm:w-44"
           >
             {SORTS.map((s) => (
@@ -142,7 +182,7 @@ export default function VideosTab({ videos, liveStats, refreshKey }) {
         <div className="panel-header">
           <p className="text-xs font-bold tracking-[0.08em] uppercase">Video library</p>
           <p className="font-mono text-[11px] text-muted-foreground">
-            SHOWING {items.length} OF {videos.length}
+            SHOWING {items.length} OF {total}
           </p>
         </div>
 
@@ -266,6 +306,8 @@ export default function VideosTab({ videos, liveStats, refreshKey }) {
             )}
           </tbody>
         </table>
+
+        <Pagination currentPage={page} totalPages={totalPages} total={total} onPageChange={setPage} />
       </div>
 
       {selectedVideo && (

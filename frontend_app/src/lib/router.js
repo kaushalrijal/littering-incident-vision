@@ -4,6 +4,7 @@ export const ROUTES = {
   '/': 'upload',
   '/videos': 'videos',
   '/incidents': 'incidents',
+  '/review': 'review',
   '/live': 'webcam',
 };
 

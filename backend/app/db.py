@@ -7,6 +7,7 @@ the same time. WAL mode keeps readers from blocking the writer.
 """
 import sqlite3
 from contextlib import closing
+from datetime import datetime, timedelta
 from typing import Any, Iterable, Optional
 
 from .config import settings
@@ -95,6 +96,13 @@ def query_one(sql: str, params: Iterable[Any] = ()) -> Optional[dict]:
     return rows[0] if rows else None
 
 
+def query_scalar(sql: str, params: Iterable[Any] = ()) -> Any:
+    """Return a single scalar value."""
+    with closing(get_conn()) as conn:
+        row = conn.execute(sql, tuple(params)).fetchone()
+        return row[0] if row else None
+
+
 # ----------------------------------------------------------------------
 # Convenience helpers specific to the domain
 # ----------------------------------------------------------------------
@@ -122,12 +130,15 @@ def list_videos(
     sort: str = "newest",
     status: Optional[str] = None,
     search: Optional[str] = None,
+    limit: int = 10,
+    offset: int = 0,
+    days: Optional[int] = None,
 ) -> list:
-    """List videos, newest first by default.
+    """List videos joined with incident counts.
 
-    ``sort`` is a key in ``VIDEO_SORTS``, ``status`` filters on the
-    processing status and ``search`` does a case-insensitive substring
-    match against the filename.
+    Sortable via ``VIDEO_SORTS`` keys; filterable by processing status,
+    a filename substring match and a ``days`` window; paginated via
+    ``limit``/``offset``.
     """
     fields = ", ".join(f"v.{f}" for f in VIDEO_FIELDS.split(", "))
     order_by = VIDEO_SORTS.get(sort, VIDEO_SORTS["newest"])
@@ -138,6 +149,9 @@ def list_videos(
     if search:
         clauses.append("v.filename LIKE ?")
         params.append(f"%{search}%")
+    if days is not None:
+        clauses.append("v.created_at >= ?")
+        params.append(_days_ago(days))
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     return query(
         f"""
@@ -146,9 +160,32 @@ def list_videos(
                AS incident_count
           FROM videos v{where}
          ORDER BY {order_by}
+         LIMIT ? OFFSET ?
         """,
-        params,
+        (*params, limit, offset),
     )
+
+
+def count_videos(
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    days: Optional[int] = None,
+) -> int:
+    """Count videos matching the same filters as :func:`list_videos`."""
+    sql = "SELECT COUNT(*) FROM videos"
+    clauses, params = [], []
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if search:
+        clauses.append("filename LIKE ?")
+        params.append(f"%{search}%")
+    if days is not None:
+        clauses.append("created_at >= ?")
+        params.append(_days_ago(days))
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    return query_scalar(sql, params) or 0
 
 
 def create_video(filename: str, file_path: str, source_type: str = "upload") -> int:
@@ -225,11 +262,15 @@ def list_incidents(
     sort: str = "newest",
     min_confidence: Optional[float] = None,
     search: Optional[str] = None,
+    limit: int = 10,
+    offset: int = 0,
+    days: Optional[int] = None,
 ) -> list:
     """List incidents joined with their video, newest first by default.
 
     Sortable via ``INCIDENT_SORTS`` keys; filterable by video, review
-    status, minimum confidence and a substring match on the reason text.
+    status, minimum confidence, a reason/filename substring match and a
+    ``days`` window; paginated via ``limit``/``offset``.
     """
     sql = """
         SELECT i.*, v.filename AS video_filename, v.file_path AS video_file_path
@@ -249,10 +290,60 @@ def list_incidents(
     if search:
         clauses.append("(i.reason LIKE ? OR v.filename LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%"])
+    if days is not None:
+        clauses.append("i.created_at >= ?")
+        params.append(_days_ago(days))
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += f" ORDER BY {INCIDENT_SORTS.get(sort, INCIDENT_SORTS['newest'])}"
+    sql += " LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
     return query(sql, params)
+
+
+def count_incidents(
+    video_id: Optional[int] = None,
+    status: Optional[str] = None,
+    min_confidence: Optional[float] = None,
+    search: Optional[str] = None,
+    days: Optional[int] = None,
+) -> int:
+    """Count incidents matching the same filters as :func:`list_incidents`."""
+    sql = "SELECT COUNT(*) FROM incidents i"
+    clauses, params = [], []
+    if video_id is not None:
+        clauses.append("i.video_id = ?")
+        params.append(video_id)
+    if status:
+        clauses.append("i.review_status = ?")
+        params.append(status)
+    if min_confidence is not None:
+        clauses.append("i.confidence >= ?")
+        params.append(min_confidence)
+    if search:
+        sql += " JOIN videos v ON v.id = i.video_id"
+        clauses.append("(i.reason LIKE ? OR v.filename LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    if days is not None:
+        clauses.append("i.created_at >= ?")
+        params.append(_days_ago(days))
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    return query_scalar(sql, params) or 0
+
+
+def count_videos_between(start: str, end: str) -> int:
+    return query_scalar(
+        "SELECT COUNT(*) FROM videos WHERE created_at >= ? AND created_at < ?",
+        (start, end),
+    ) or 0
+
+
+def count_incidents_between(start: str, end: str) -> int:
+    return query_scalar(
+        "SELECT COUNT(*) FROM incidents WHERE created_at >= ? AND created_at < ?",
+        (start, end),
+    ) or 0
 
 
 def create_incident(
@@ -298,7 +389,113 @@ def set_incident_status(incident_id: int, review_status: str) -> Optional[dict]:
     return get_incident(incident_id)
 
 
+def list_video_incident_summaries(
+    status_filter: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    min_incidents: int = 0,
+    days: Optional[int] = None,
+) -> list:
+    """Return videos with incident count breakdowns for the review dashboard."""
+    sql = """
+        SELECT
+            v.id,
+            v.filename,
+            v.status AS video_status,
+            v.created_at,
+            COUNT(i.id) AS total_incidents,
+            SUM(CASE WHEN i.review_status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+            SUM(CASE WHEN i.review_status = 'confirmed' THEN 1 ELSE 0 END) AS confirmed_count,
+            SUM(CASE WHEN i.review_status = 'false_alarm' THEN 1 ELSE 0 END) AS false_alarm_count
+        FROM videos v
+        LEFT JOIN incidents i ON i.video_id = v.id
+    """
+    having_clauses, params = [], []
+
+    if status_filter and status_filter != "all":
+        if status_filter == "pending":
+            having_clauses.append("SUM(CASE WHEN i.review_status = 'pending' THEN 1 ELSE 0 END) > 0")
+        elif status_filter == "confirmed":
+            having_clauses.append("SUM(CASE WHEN i.review_status = 'confirmed' THEN 1 ELSE 0 END) > 0")
+        elif status_filter == "false_alarm":
+            having_clauses.append("SUM(CASE WHEN i.review_status = 'false_alarm' THEN 1 ELSE 0 END) > 0")
+        elif status_filter == "has_incidents":
+            having_clauses.append("COUNT(i.id) > 0")
+
+    if min_incidents > 0:
+        having_clauses.append(f"COUNT(i.id) >= {min_incidents}")
+
+    where_parts = []
+    if search:
+        where_parts.append("v.filename LIKE ?")
+        params.append(f"%{search}%")
+    if days:
+        where_parts.append("v.created_at >= ?")
+        params.append(_days_ago(days))
+
+    if where_parts:
+        sql += " WHERE " + " AND ".join(where_parts)
+
+    sql += " GROUP BY v.id"
+
+    if having_clauses:
+        sql += " HAVING " + " AND ".join(having_clauses)
+
+    sql += " ORDER BY v.id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
+    return query(sql, params)
+
+
+def count_video_incident_summaries(
+    status_filter: Optional[str] = None,
+    search: Optional[str] = None,
+    min_incidents: int = 0,
+    days: Optional[int] = None,
+) -> int:
+    sql = "SELECT COUNT(*) FROM (SELECT v.id FROM videos v LEFT JOIN incidents i ON i.video_id = v.id"
+    having_clauses, params = [], []
+
+    if status_filter and status_filter != "all":
+        if status_filter == "pending":
+            having_clauses.append("SUM(CASE WHEN i.review_status = 'pending' THEN 1 ELSE 0 END) > 0")
+        elif status_filter == "confirmed":
+            having_clauses.append("SUM(CASE WHEN i.review_status = 'confirmed' THEN 1 ELSE 0 END) > 0")
+        elif status_filter == "false_alarm":
+            having_clauses.append("SUM(CASE WHEN i.review_status = 'false_alarm' THEN 1 ELSE 0 END) > 0")
+        elif status_filter == "has_incidents":
+            having_clauses.append("COUNT(i.id) > 0")
+
+    if min_incidents > 0:
+        having_clauses.append(f"COUNT(i.id) >= {min_incidents}")
+
+    where_parts = []
+    if search:
+        where_parts.append("v.filename LIKE ?")
+        params.append(f"%{search}%")
+    if days:
+        where_parts.append("v.created_at >= ?")
+        params.append(_days_ago(days))
+
+    if where_parts:
+        sql += " WHERE " + " AND ".join(where_parts)
+
+    sql += " GROUP BY v.id"
+
+    if having_clauses:
+        sql += " HAVING " + " AND ".join(having_clauses)
+
+    sql += ")"
+    return query_scalar(sql, params) or 0
+
+
 def _now() -> str:
     from .utils import now_str
 
     return now_str()
+
+
+def _days_ago(n: int) -> str:
+    """Return a 'YYYY-MM-DD HH:MM:SS' string for *n* days ago."""
+    return (datetime.now() - timedelta(days=n)).strftime("%Y-%m-%d 00:00:00")

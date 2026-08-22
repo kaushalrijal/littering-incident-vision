@@ -91,7 +91,9 @@ def _process_frame(detector, engine, pipeline, jpeg_bytes, frame_idx, want_image
     engine.frame_width = w
     engine.frame_height = h
 
-    start = time.monotonic()
+    # perf_counter, not monotonic: monotonic has ~15.6ms granularity on
+    # Windows (Python <= 3.12), which quantizes small latencies.
+    start = time.perf_counter()
     dets = detector.predict(frame)
     person_dets = [d for d in dets if d["class_id"] in detector.person_ids]
     waste_dets = [d for d in dets if d["class_id"] in detector.waste_ids]
@@ -99,7 +101,7 @@ def _process_frame(detector, engine, pipeline, jpeg_bytes, frame_idx, want_image
     ts_ms = int(time.time() * 1000)
     new_events = engine.process_frame(frame_idx, ts_ms, person_dets, waste_dets)
     associations = engine.get_active_associations()
-    elapsed_ms = (time.monotonic() - start) * 1000
+    elapsed_ms = (time.perf_counter() - start) * 1000
 
     if want_image:
         # Legacy path: draw server-side and ship an annotated JPEG back.
@@ -267,7 +269,13 @@ async def _run_webcam_session(websocket: WebSocket):
 
             try:
                 await websocket.send_text(json.dumps(result))
-            except (WebSocketDisconnect, RuntimeError):
+            except WebSocketDisconnect:
+                break
+            except Exception as exc:
+                # Transport died mid-send: end the session cleanly rather than
+                # receiving on a socket whose state is already disconnected
+                # (this caused the 'WebSocket is not connected' ASGI crash).
+                logger.info("Webcam send failed, closing stream: %s", exc)
                 break
             frame_idx += 1
     finally:
@@ -303,6 +311,8 @@ async def websocket_webcam_endpoint(websocket: WebSocket):
         await _run_webcam_session(websocket)
     except WebSocketDisconnect:
         pass
+    except Exception:
+        logger.exception("Webcam session crashed")
     finally:
         _session_active = False
         logger.info("Webcam WebSocket client disconnected")

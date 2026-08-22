@@ -61,7 +61,8 @@ class Settings:
 
         # --- Model -------------------------------------------------------
         self.model_path: str = _env_str("MODEL_PATH", "yolov8n.pt")
-        self.device: str = _env_str("DEVICE", "cpu")
+        # "auto" resolves to CUDA when torch reports it available, else CPU.
+        self.device: str = _env_str("DEVICE", "auto")
         self.conf_threshold: float = _env_float("CONF_THRESHOLD", 0.30)
         self.iou_threshold: float = _env_float("IOU_THRESHOLD", 0.45)
         self.imgsz: int = _env_int("IMGSZ", 640)
@@ -92,6 +93,16 @@ class Settings:
         self.person_near_window: int = _env_int("PERSON_NEAR_WINDOW", 15)
         self.person_expire: int = _env_int("PERSON_EXPIRE", 60)
         self.waste_expire: int = _env_int("WASTE_EXPIRE", 60)
+
+        # --- Noise rejection ------------------------------------------------
+        # Sightings required before a waste track may show as an association
+        # or fire (brief low-conf flickers die before confirming).
+        self.confirm_frames: int = _env_int("CONFIRM_FRAMES", 3)
+        # Fraction of its life a track must have been seen (sightings/age);
+        # blocks sparse flicker stitched together across many frames.
+        self.min_hit_ratio: float = _env_float("MIN_HIT_RATIO", 0.5)
+        # Mean detection confidence a track needs before it may fire.
+        self.waste_min_conf: float = _env_float("WASTE_MIN_CONF", 0.45)
 
         # --- Track Stitching & Tracker Recovery ---------------------------
         self.waste_reconnect_dist: float = _env_float("WASTE_RECONNECT_DIST", 60.0)

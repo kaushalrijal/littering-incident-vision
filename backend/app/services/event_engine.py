@@ -98,17 +98,44 @@ class EventEngine:
         # Pre-computed history size used by the stationary check.
         self._history_len = max(int(getattr(cfg, "stationary_frames", 12)) + 2, 4)
 
+        # --- Noise-rejection gates -----------------------------------------
+        # Gate 1 (confirmation): a waste track must be detected in at least
+        # this many distinct frames before it may show up as an active
+        # association (HUD) or fire an event. Brief low-conf flickers die young.
+        self.confirm_frames = max(1, int(getattr(cfg, "confirm_frames", 3)))
+        # Gate 2 (consistency): fraction of its life a track must actually have
+        # been seen (sightings / age). Flicker stitched together by reconnects
+        # accumulates raw sightings but fails this ratio.
+        self.min_hit_ratio = float(getattr(cfg, "min_hit_ratio", 0.5))
+        # Gate 3 (confidence): minimum mean detection confidence to fire.
+        self.waste_min_conf = float(getattr(cfg, "waste_min_conf", 0.45))
+
+    def _is_consistent(self, state: WasteState, frame_idx: int) -> bool:
+        """True if the track has been seen in >= min_hit_ratio of its life."""
+        age = frame_idx - state.born_frame + 1
+        if age <= 0:
+            return True
+        return (state.frames / age) >= self.min_hit_ratio
+
     def get_active_associations(self) -> List[Tuple[int, int]]:
-        """Return list of (waste_track_id, active_person_track_id) for debugging UI overlay."""
+        """Return list of (waste_track_id, active_person_track_id) for debugging UI overlay.
+
+        Unconfirmed tracks (seen in fewer than ``confirm_frames`` distinct
+        frames) are withheld: momentary noise detections must not flash up as
+        (trash, person) pairs.
+        """
         assoc = []
         for tid, state in self.waste_tracks.items():
-            if not state.skipped and state.associated_person is not None:
-                active_pid = state.associated_person
-                for p_tid in self.person_tracks:
-                    if self._resolve_person_id(p_tid) == self._resolve_person_id(state.associated_person):
-                        active_pid = p_tid
-                        break
-                assoc.append((tid, active_pid))
+            if state.skipped or state.associated_person is None:
+                continue
+            if state.frames < self.confirm_frames:
+                continue
+            active_pid = state.associated_person
+            for p_tid in self.person_tracks:
+                if self._resolve_person_id(p_tid) == self._resolve_person_id(state.associated_person):
+                    active_pid = p_tid
+                    break
+            assoc.append((tid, active_pid))
         return assoc
 
     # ------------------------------------------------------------------
@@ -212,11 +239,21 @@ class EventEngine:
                 continue
             if state.fired or state.skipped:
                 continue
+            # Noise gate 1: unconfirmed tracks (brief flickers) never fire.
+            if state.frames < self.confirm_frames:
+                continue
             if state.associated_person is None:
                 self._try_associate(state, frame_idx)
             if state.associated_person is None:
                 continue
             if state.frames < self.cfg.min_track_frames:
+                continue
+            # Noise gate 2: consistency — flicker stitched across a long life
+            # accumulates sightings but fails the seen/age ratio.
+            if not self._is_consistent(state, frame_idx):
+                continue
+            # Noise gate 3: average detection confidence floor.
+            if state.mean_conf < self.waste_min_conf:
                 continue
             if self._fired_count >= self.cfg.max_incidents:
                 continue
@@ -264,12 +301,17 @@ class EventEngine:
                 best_cand = l_state
 
         if best_cand is not None:
+            # Grant catch-up stationary credit only when the track has been
+            # consistently detected so far (a real object under occlusion).
+            # Sparse flicker noise that merely recurs nearby gets no credit.
+            consistent_before = self._is_consistent(best_cand, frame_idx)
             best_cand.last_center = center
             best_cand.last_seen_frame = frame_idx
             best_cand.history.append(center)
             best_cand.frames += 1
             best_cand.mean_conf = (best_cand.mean_conf * (best_cand.frames - 1) + det["conf"]) / best_cand.frames
-            best_cand.stationary_frames += 1
+            if consistent_before:
+                best_cand.stationary_frames += 1
 
             self.lost_waste_tracks.pop(best_cand.track_id, None)
             return best_cand

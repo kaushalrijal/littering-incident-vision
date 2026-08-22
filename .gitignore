@@ -8,3 +8,4 @@ backend/data/litter.db
 .venv/
 .pytest_cache/
 *.dll
+.env/

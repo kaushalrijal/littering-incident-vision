@@ -47,11 +47,10 @@ function StatusBadge({ status }) {
   );
 }
 
-export default function IncidentsTab({ videos, refreshKey }) {
+export default function IncidentsTab({ refreshKey }) {
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState('all');
   const [sort, setSort] = useState('newest');
-  const [videoId, setVideoId] = useState('all');
   const [days, setDays] = useState('all');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -76,7 +75,6 @@ export default function IncidentsTab({ videos, refreshKey }) {
     });
     if (sort !== 'newest') params.set('sort', sort);
     if (status !== 'all') params.set('status', status);
-    if (videoId !== 'all') params.set('video_id', videoId);
     if (days !== 'all') params.set('days', days);
     if (minConfidence > 0) params.set('min_confidence', minConfidence / 100);
     if (search) params.set('search', search);
@@ -94,7 +92,7 @@ export default function IncidentsTab({ videos, refreshKey }) {
     return () => {
       cancelled = true;
     };
-  }, [status, sort, videoId, days, page, minConfidence, search, refreshKey]);
+  }, [status, sort, days, page, minConfidence, search, refreshKey]);
 
   useEffect(() => {
     if (!selectedIncident) return;
@@ -162,18 +160,6 @@ export default function IncidentsTab({ videos, refreshKey }) {
             placeholder="Search reason or video…"
             className="field sm:w-52"
           />
-          <select
-            value={videoId}
-            onChange={(e) => changeFilter(setVideoId)(e.target.value)}
-            className="field cursor-pointer sm:w-44"
-          >
-            <option value="all">All videos</option>
-            {videos.map((v) => (
-              <option key={v.id} value={v.id}>
-                #{v.id} {v.filename}
-              </option>
-            ))}
-          </select>
           <select
             value={days}
             onChange={(e) => changeFilter(setDays)(e.target.value)}
@@ -246,7 +232,7 @@ export default function IncidentsTab({ videos, refreshKey }) {
                       <img
                         src={`/media/${inc.snapshot_path}`}
                         alt={`Incident #${inc.id} snapshot`}
-                        className="h-full w-full object-cover grayscale transition-all duration-300 group-hover:scale-[1.02] group-hover:grayscale-0"
+                        className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
                       />
                     ) : (
                       <div className="grid h-full place-items-center">

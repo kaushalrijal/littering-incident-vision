@@ -144,9 +144,7 @@ export default function App() {
 
           {activeTab === 'upload' && <UploadTab onUploadSuccess={handleUploadSuccess} />}
           {activeTab === 'videos' && <VideosTab liveStats={liveStats} refreshKey={refreshKey} />}
-          {activeTab === 'incidents' && (
-            <IncidentsTab videos={videos} refreshKey={refreshKey} />
-          )}
+          {activeTab === 'incidents' && <IncidentsTab refreshKey={refreshKey} />}
           {activeTab === 'review' && <ReviewTab refreshKey={refreshKey} />}
           {activeTab === 'webcam' && <WebcamTab />}
         </div>

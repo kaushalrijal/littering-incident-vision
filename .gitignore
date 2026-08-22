@@ -8,4 +8,6 @@ merge_class_2_to_1.py
 dataset
 *.mp4
 *.mov
-backend/storage/snapshots/**/*.jpg
+backend/storage/snapshots/**/*.jpg/minor
+/backend/data/*.db
+backend/data/litter.db

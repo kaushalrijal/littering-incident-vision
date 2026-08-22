@@ -61,7 +61,8 @@ class Settings:
 
         # --- Model -------------------------------------------------------
         self.model_path: str = _env_str("MODEL_PATH", "yolov8n.pt")
-        self.device: str = _env_str("DEVICE", "cpu")
+        # "auto" resolves to CUDA when torch reports it available, else CPU.
+        self.device: str = _env_str("DEVICE", "auto")
         self.conf_threshold: float = _env_float("CONF_THRESHOLD", 0.30)
         self.iou_threshold: float = _env_float("IOU_THRESHOLD", 0.45)
         self.imgsz: int = _env_int("IMGSZ", 640)

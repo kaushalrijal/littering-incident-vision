@@ -8,10 +8,12 @@ YOLO detector + ByteTrack tracker wrapper around Ultralytics.
   If you fine-tune a model on TACO/TrashNet, set ``WASTE_CLASSES`` to your
   class names (e.g. ``bottle,cup,wrapper,paper,other_waste``).
 
-The wrapper is NOT thread-safe by design: it is used exclusively by the
-single background processing worker.
+The wrapper is NOT thread-safe by design: each consumer (background worker,
+webcam session) creates its own instance. ``DEVICE=auto`` (the default)
+resolves to CUDA when torch reports it available, else CPU.
 """
 import logging
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
@@ -34,9 +36,40 @@ class Detector:
 
         self.model_path = model_path or settings.model_path
         self.device = device or settings.device
+        if str(self.device).strip().lower() in ("", "auto"):
+            import torch
+
+            if torch.cuda.is_available():
+                self.device = "cuda"
+            elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+                self.device = "mps"  # Apple Silicon GPU
+            else:
+                self.device = "cpu"
+            logger.info("DEVICE=auto resolved to %s", self.device)
+        else:
+            # Explicit device requested: fail soft if it does not exist.
+            import torch
+
+            dev = str(self.device).strip().lower()
+            available = (
+                (dev == "cuda" and torch.cuda.is_available())
+                or (dev == "mps" and getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available())
+                or dev == "cpu"
+            )
+            if not available:
+                logger.warning(
+                    "DEVICE=%s requested but not available; falling back to cpu.", self.device
+                )
+                self.device = "cpu"
         self.conf = conf if conf is not None else settings.conf_threshold
         self.iou = iou if iou is not None else settings.iou_threshold
         self.imgsz = imgsz if imgsz is not None else settings.imgsz
+
+        # Resolve tracker config once (was re-stat'ed on every predict call).
+        custom_tracker = Path(__file__).resolve().parent / "bytetrack_custom.yaml"
+        self.tracker_cfg = (
+            str(custom_tracker) if custom_tracker.exists() else "bytetrack.yaml"
+        )
 
         logger.info("Loading YOLO model %r (device=%s) ...", self.model_path, self.device)
         self.model = YOLO(self.model_path)
@@ -86,14 +119,10 @@ class Detector:
         ``track_id`` may be None (e.g. very first frame or tracker warm-up);
         the event engine simply skips untracked detections.
         """
-        from pathlib import Path
-        custom_tracker = Path(__file__).resolve().parent / "bytetrack_custom.yaml"
-        tracker_cfg = str(custom_tracker) if custom_tracker.exists() else "bytetrack.yaml"
-
         results = self.model.track(
             frame_bgr,
             persist=True,
-            tracker=tracker_cfg,
+            tracker=self.tracker_cfg,
             conf=self.conf,
             iou=self.iou,
             imgsz=self.imgsz,

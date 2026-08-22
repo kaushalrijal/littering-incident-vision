@@ -15,6 +15,8 @@ export default function WebcamTab() {
   const outputImgRef = useRef(null);
   const wsRef = useRef(null);
   const animationFrameIdRef = useRef(null);
+  const pendingFrameRef = useRef(false);
+  const pendingSinceRef = useRef(0);
   const lastFrameTimeRef = useRef(performance.now());
   const frameCounterRef = useRef(0);
   const fpsTimerRef = useRef(performance.now());
@@ -52,6 +54,8 @@ export default function WebcamTab() {
         try {
           const data = JSON.parse(event.data);
           if (data.type === 'webcam_frame') {
+            // Previous frame fully processed: allow sending the next one.
+            pendingFrameRef.current = false;
             if (outputImgRef.current) {
               outputImgRef.current.src = data.image;
             }
@@ -83,7 +87,9 @@ export default function WebcamTab() {
       };
 
       ws.onclose = () => {
-        setIsStreaming(false);
+        // Fully stop the camera too, otherwise the webcam stays active
+        // (light on) showing a frozen frame after the socket dies.
+        stopCamera();
       };
 
       wsRef.current = ws;
@@ -94,6 +100,7 @@ export default function WebcamTab() {
 
   const stopCamera = () => {
     setIsStreaming(false);
+    pendingFrameRef.current = false;
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
@@ -113,10 +120,20 @@ export default function WebcamTab() {
 
   const startStreamingLoop = (ws) => {
     let lastSend = 0;
-    const interval = 1000 / 20; // max ~20 FPS send rate to server
+    const interval = 1000 / 30; // capture cap; real rate is limited by server
 
     const sendFrame = (timestamp) => {
-      if (ws.readyState === WebSocket.OPEN && videoRef.current && canvasRef.current) {
+      // Safety valve: if the server dropped our last frame (no response),
+      // unblock sending instead of freezing the stream forever.
+      if (pendingFrameRef.current && performance.now() - pendingSinceRef.current > 3000) {
+        pendingFrameRef.current = false;
+      }
+      if (
+        ws.readyState === WebSocket.OPEN &&
+        !pendingFrameRef.current &&
+        videoRef.current &&
+        canvasRef.current
+      ) {
         if (timestamp - lastSend >= interval) {
           lastSend = timestamp;
           const video = videoRef.current;
@@ -128,6 +145,10 @@ export default function WebcamTab() {
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             const b64Image = canvas.toDataURL('image/jpeg', 0.7);
 
+            // Backpressure: mark in-flight so we never queue frames faster
+            // than the server can process them (prevents latency buildup).
+            pendingFrameRef.current = true;
+            pendingSinceRef.current = performance.now();
             ws.send(
               JSON.stringify({
                 image: b64Image,

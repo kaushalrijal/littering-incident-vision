@@ -389,6 +389,14 @@ def set_incident_status(incident_id: int, review_status: str) -> Optional[dict]:
     return get_incident(incident_id)
 
 
+def set_incident_clip_path(incident_id: int, clip_path: Optional[str]) -> None:
+    """Attach (or clear) the evidence-clip path once a live-session clip is written."""
+    execute(
+        "UPDATE incidents SET clip_path = ?, updated_at = ? WHERE id = ?",
+        (clip_path, _now(), incident_id),
+    )
+
+
 def list_video_incident_summaries(
     status_filter: Optional[str] = None,
     search: Optional[str] = None,

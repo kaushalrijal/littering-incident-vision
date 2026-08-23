@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Camera, CameraOff, AlertTriangle } from 'lucide-react';
+import ToastStack from './ToastStack';
+import { playIncidentAlarm, unlockAlarm } from '../lib/alarm';
 
 // Colours for the overlay (match the dashboard theme).
 const PERSON_COLOR = '#ffffff'; // white boxes on the dark video feed
@@ -10,6 +12,9 @@ const SEND_MIN_INTERVAL = 1000 / 30; // cap send attempts at ~30/s
 const RESPONSE_WATCHDOG_MS = 2500; // if no reply in this long, allow a resend
 const MAX_RECONNECT_DELAY = 8000;
 
+const MAX_TOASTS = 4; // visible incident notifications at once
+const TOAST_DURATION_MS = 6000; // auto-dismiss window per toast
+
 export default function WebcamTab() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [fps, setFps] = useState(0);
@@ -17,6 +22,9 @@ export default function WebcamTab() {
   const [associations, setAssociations] = useState([]);
   const [incidentCount, setIncidentCount] = useState(0);
   const [lastIncident, setLastIncident] = useState(null);
+  const [toasts, setToasts] = useState([]);
+  const [evidenceRecording, setEvidenceRecording] = useState(false);
+  const [staleBackend, setStaleBackend] = useState(false); // old backend: no evidence saving
   const [error, setError] = useState(null);
   const [status, setStatus] = useState('offline'); // offline | connecting | live | reconnecting
 
@@ -31,6 +39,8 @@ export default function WebcamTab() {
   const manualStopRef = useRef(false); // true once the user clicks Stop (blocks reconnect)
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef(null);
+  const toastIdRef = useRef(0);
+  const toastTimersRef = useRef(new Map());
 
   // FPS accounting (based on frames actually returned by the server).
   const frameCounterRef = useRef(0);
@@ -107,6 +117,48 @@ export default function WebcamTab() {
     }
   };
 
+  // -- Incident notifications (toast + alarm) --------------------------------
+  const dismissToast = (id) => {
+    const timer = toastTimersRef.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      toastTimersRef.current.delete(id);
+    }
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const clearToasts = () => {
+    toastTimersRef.current.forEach((timer) => clearTimeout(timer));
+    toastTimersRef.current.clear();
+    setToasts([]);
+  };
+
+  const pushIncidentToasts = (events) => {
+    const fresh = events.map((ev) => {
+      const id = ++toastIdRef.current;
+      const timer = setTimeout(() => dismissToast(id), TOAST_DURATION_MS);
+      toastTimersRef.current.set(id, timer);
+      return {
+        id,
+        message: ev.reason || 'Waste dropped near a person.',
+        confidence: ev.confidence,
+        incidentId: ev.incident_id,
+      };
+    });
+    setToasts((prev) => {
+      const next = [...prev, ...fresh];
+      // Keep only the newest MAX_TOASTS; stop the timers of the dropped ones.
+      for (const t of next.slice(0, Math.max(0, next.length - MAX_TOASTS))) {
+        const timer = toastTimersRef.current.get(t.id);
+        if (timer) {
+          clearTimeout(timer);
+          toastTimersRef.current.delete(t.id);
+        }
+      }
+      return next.slice(Math.max(0, next.length - MAX_TOASTS));
+    });
+  };
+
   // -- Incoming server messages ---------------------------------------------
   const handleMessage = (event) => {
     let data;
@@ -133,13 +185,23 @@ export default function WebcamTab() {
 
     if (data.mode === 'meta') {
       drawOverlay(data);
+      // New backends tag every frame with `recording`. Its absence means the
+      // server process predates evidence saving (started before an update and
+      // never restarted) — surface that instead of failing silently.
+      if (data.recording === undefined) setStaleBackend(true);
     }
     setLatency(data.inference_ms || 0);
     setAssociations(data.associations || []);
+    if (typeof data.recording === 'boolean') {
+      setEvidenceRecording(data.recording);
+      setStaleBackend(false);
+    }
 
     if (data.events && data.events.length > 0) {
       setIncidentCount((prev) => prev + data.events.length);
       setLastIncident(data.events[0]);
+      playIncidentAlarm();
+      pushIncidentToasts(data.events);
     }
 
     frameCounterRef.current += 1;
@@ -254,9 +316,16 @@ export default function WebcamTab() {
     setError(null);
     setIncidentCount(0);
     setLastIncident(null);
+    clearToasts();
+    setEvidenceRecording(false);
+    setStaleBackend(false);
     manualStopRef.current = false;
     reconnectAttemptsRef.current = 0;
     setStatus('connecting');
+
+    // Create the audio context inside this click gesture so the incident
+    // alarm is allowed to play later without another interaction.
+    unlockAlarm();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -309,6 +378,8 @@ export default function WebcamTab() {
       const ctx = canvas.getContext('2d');
       if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
+    clearToasts();
+    setEvidenceRecording(false);
   };
 
   const stopCamera = () => {
@@ -362,6 +433,24 @@ export default function WebcamTab() {
         </div>
       )}
 
+      {staleBackend && (
+        <div className="flex items-start gap-3 border border-[#f59e0b] p-4 text-[#b45309]">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={2.5} />
+          <div>
+            <p className="text-xs leading-relaxed font-semibold">
+              Evidence saving is inactive — the backend server is running an
+              older version.
+            </p>
+            <p className="mt-1 text-xs leading-relaxed">
+              Incidents still appear live, but they are not saved for review.
+              Restart the backend (stop it and run{' '}
+              <code className="bg-muted px-1 py-0.5 font-mono">python run.py</code>{' '}
+              again), then start the camera.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <div className="relative flex aspect-video items-center justify-center overflow-hidden border border-border bg-black">
@@ -400,6 +489,13 @@ export default function WebcamTab() {
                   }`}
                 />
                 {statusLabel}
+              </div>
+            )}
+
+            {isStreaming && evidenceRecording && (
+              <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-destructive px-2 py-1 font-mono text-[10px] leading-none font-bold tracking-wider text-white uppercase">
+                <span className="h-1.5 w-1.5 animate-pulse bg-white" />
+                Rec
               </div>
             )}
           </div>
@@ -450,8 +546,13 @@ export default function WebcamTab() {
             </div>
 
             {lastIncident ? (
-              <div className="border-l-4 border-destructive bg-sidebar p-2.5 pl-3 text-xs leading-snug font-medium">
-                {lastIncident.reason}
+              <div className="border-l-4 border-destructive bg-sidebar p-2.5 pl-3">
+                <p className="text-xs leading-snug font-medium">{lastIncident.reason}</p>
+                <p className="mt-1.5 font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
+                  {lastIncident.incident_id != null
+                    ? `Saved for review — incident #${lastIncident.incident_id}`
+                    : 'Detected'}
+                </p>
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">
@@ -461,6 +562,8 @@ export default function WebcamTab() {
           </div>
         </div>
       </div>
+
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

@@ -22,10 +22,16 @@ Design notes
       with **metadata only** (boxes, track ids, associations, events). The
       browser draws the overlay on a canvas over its own ``<video>`` — no image
       is re-encoded or shipped back, which is the big "feels real-time" win.
-    - *Legacy:* client sends ``{"image": "data:image/jpeg;base64,..."}``; server
+    - *Legacy:* client sends ``{"image": "data:image/jpeg;base64,...}"``; server
       replies with an annotated JPEG in ``image``. The shipped dashboard bundle
       uses this path, so it keeps working unchanged until the frontend is
       rebuilt.
+* **Evidence is saved like uploads.** A per-session :class:`LiveSessionRecorder`
+  ring-buffers recent frames; when the engine fires, it persists the incident
+  (annotated snapshot + evidence clip spanning pre/post-roll around the
+  littering moment, exactly like uploaded videos) so live findings land in the
+  review dashboard. Responses carry a ``recording`` flag while a clip's
+  post-roll window is still open, which the UI shows as a REC badge.
 """
 import asyncio
 import base64
@@ -41,7 +47,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from backend.app.config import settings
 from backend.app.services.event_engine import EventEngine
+from backend.app.services.live_recorder import LiveSessionRecorder
 from backend.app.services.pipeline import Pipeline
+from backend.app.services.websocket_manager import ws_manager
 
 logger = logging.getLogger("routers.webcam")
 router = APIRouter(tags=["webcam"])
@@ -74,13 +82,15 @@ def _get_webcam_detector():
     return _webcam_detector
 
 
-def _process_frame(detector, engine, pipeline, jpeg_bytes, frame_idx, want_image):
+def _process_frame(detector, engine, pipeline, jpeg_bytes, frame_idx, want_image, recorder=None):
     """
     Decode one JPEG frame, run detection + tracking + the event engine, and
     build the response.
 
     Runs in a worker thread (via ``asyncio.to_thread``). Returns a JSON-ready
-    dict, or ``None`` if the frame could not be decoded/encoded.
+    dict, or ``None`` if the frame could not be decoded/encoded. When a
+    ``recorder`` is given, every frame is buffered for evidence clips and new
+    events are persisted with snapshot + clip like uploaded videos.
     """
     np_arr = np.frombuffer(jpeg_bytes, np.uint8)
     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -103,6 +113,43 @@ def _process_frame(detector, engine, pipeline, jpeg_bytes, frame_idx, want_image
     associations = engine.get_active_associations()
     elapsed_ms = (time.perf_counter() - start) * 1000
 
+    # Evidence recording: buffer the frame first (so the just-fired event can
+    # backfill its pre-roll from the ring buffer), then persist each event.
+    evidence_recording = False
+    if recorder is not None:
+        try:
+            incidents_before = recorder.incident_count
+            was_recording = recorder.recording
+
+            recorder.frame_width = w
+            recorder.frame_height = h
+            recorder.record_frame(ts_ms, jpeg_bytes)
+            for event in new_events:
+                snapshot_bgr = pipeline._draw_detections(frame, dets, engine=engine)
+                incident_id = recorder.register_event(event, ts_ms, snapshot_bgr=snapshot_bgr)
+                if incident_id is not None:
+                    event["incident_id"] = incident_id
+                    logger.info(
+                        "Live incident %d saved (track %s, conf %.2f)",
+                        incident_id, event.get("track_id"), event.get("confidence", 0),
+                    )
+            evidence_recording = recorder.recording
+
+            # Nudge open dashboards to refresh — but only on a real change,
+            # never per frame ('video_status' triggers a refetch client-side).
+            if (
+                recorder.incident_count != incidents_before
+                or evidence_recording != was_recording
+            ):
+                ws_manager.broadcast_sync({
+                    "type": "video_status",
+                    "video_id": recorder.session_video_id,
+                    "status": "completed",
+                    "stats": {"detected_incidents": recorder.incident_count},
+                })
+        except Exception:
+            logger.exception("Live evidence recording failed")
+
     if want_image:
         # Legacy path: draw server-side and ship an annotated JPEG back.
         annotated = pipeline._draw_detections(frame, dets, engine=engine)
@@ -117,6 +164,7 @@ def _process_frame(detector, engine, pipeline, jpeg_bytes, frame_idx, want_image
             "inference_ms": round(elapsed_ms, 1),
             "associations": associations,
             "events": new_events,
+            "recording": evidence_recording,
         }
 
     # New path: metadata only. The browser draws the overlay itself.
@@ -154,6 +202,7 @@ def _process_frame(detector, engine, pipeline, jpeg_bytes, frame_idx, want_image
         "detections": detections,
         "associations": associations,
         "events": new_events,
+        "recording": evidence_recording,
     }
 
 
@@ -179,6 +228,7 @@ async def _run_webcam_session(websocket: WebSocket):
 
     pipeline = Pipeline(detector)  # only used for the legacy annotated-image path
     engine = EventEngine(settings, frame_width=640, frame_height=480)
+    recorder = LiveSessionRecorder(settings)  # saves incidents like uploads do
 
     # Single-slot mailbox: the receiver overwrites it; the processor drains it.
     latest = {"frame": None, "want_image": False}
@@ -259,6 +309,7 @@ async def _run_webcam_session(websocket: WebSocket):
                     frame_bytes,
                     frame_idx,
                     want_image,
+                    recorder,
                 )
             except Exception as exc:  # one bad frame must not end the session
                 logger.warning("Error processing webcam frame: %s", exc)
@@ -283,6 +334,24 @@ async def _run_webcam_session(websocket: WebSocket):
         recv_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await recv_task
+        # Flush evidence clips still collecting post-roll and close the
+        # session's video row. Off the event loop: encoding can take a moment.
+        if recorder.enabled:
+            try:
+                await asyncio.to_thread(recorder.finalize_all)
+                if recorder.session_video_id is not None:
+                    ws_manager.broadcast_sync({
+                        "type": "video_status",
+                        "video_id": recorder.session_video_id,
+                        "status": "completed",
+                        "stats": {"detected_incidents": recorder.incident_count},
+                    })
+                    logger.info(
+                        "Live session saved as video %d with %d incident(s)",
+                        recorder.session_video_id, recorder.incident_count,
+                    )
+            except Exception:
+                logger.exception("Failed to finalize live camera session")
 
 
 @router.websocket("/ws/webcam")

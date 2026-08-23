@@ -114,6 +114,16 @@ class Settings:
         # --- Evidence clips ----------------------------------------------
         self.clip_before_ms: int = _env_int("CLIP_BEFORE_MS", 2000)
         self.clip_after_ms: int = _env_int("CLIP_AFTER_MS", 3000)
+        # Hard cap on evidence-clip length. Clips are anchored at the waste
+        # object's birth (the littering moment); if it was carried around for
+        # a long time before being dropped, trim from the head.
+        self.clip_max_ms: int = _env_int("CLIP_MAX_MS", 15000)
+
+        # --- Live camera (webcam) ----------------------------------------
+        # Persist incidents from live sessions exactly like uploaded videos:
+        # annotated snapshot + evidence clip (pre-roll from the ring buffer,
+        # post-roll recorded after the fire) + rows in the review dashboard.
+        self.webcam_save_evidence: bool = _env_bool("WEBCAM_SAVE_EVIDENCE", True)
 
         self._ensure_dirs()
 

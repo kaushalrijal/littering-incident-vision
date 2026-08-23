@@ -32,6 +32,59 @@ WASTE_COLOR = (0, 0, 255)    # BGR red
 CODECS = ["avc1", "H264", "x264", "mp4v"]
 
 
+def open_video_writer(out_path: str, fps, width: int, height: int):
+    """Open a ``cv2.VideoWriter`` trying every codec in ``CODECS``.
+
+    Shared by the upload pipeline and the live-camera evidence recorder so
+    both produce identical, browser-playable .mp4 files.
+    """
+    for codec in CODECS:
+        try:
+            fourcc = cv2.VideoWriter_fourcc(*codec)
+        except Exception:
+            continue
+        writer = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
+        if writer.isOpened():
+            logger.debug("Using codec %s for %s", codec, out_path)
+            return writer
+        writer.release()
+    logger.warning("No usable video codec for %s (tried %s)", out_path, CODECS)
+    return None
+
+
+def compute_clip_window(event: dict, fire_frame: int, fps: float, cfg) -> tuple[int, int]:
+    """Source-frame window ``[start, end)`` for an evidence clip.
+
+    Anchored at the littering moment — when the waste object first appeared
+    next to the person (``event["born_timestamp_ms"]``) — rather than at the
+    event's fire frame. By the time the engine has confirmed the track and
+    seen the person leave (S ^ M), the throw happened seconds ago, so a fixed
+    pre-roll around the fire frame started mid-throw.
+
+    ``clip_before_ms`` becomes the lead-in shown before that moment;
+    ``clip_after_ms`` is still kept after the fire so the walk-away stays in
+    view. The window is capped at ``clip_max_ms``: when the cap bites, the
+    head is trimmed because the throw and its aftermath matter more than the
+    long approach (e.g. trash carried around for minutes before dropping).
+    """
+    born_ms = event.get("born_timestamp_ms")
+    if born_ms is None:
+        born_ms = event.get("timestamp_ms", 0)
+    anchor = int(born_ms / 1000.0 * fps)
+    anchor = max(0, min(anchor, fire_frame))  # guard against clock skew
+
+    pre_frames = int(cfg.clip_before_ms / 1000.0 * fps)
+    post_frames = int(cfg.clip_after_ms / 1000.0 * fps)
+
+    start = max(0, anchor - pre_frames)
+    end = max(fire_frame + post_frames, start + pre_frames + post_frames)
+
+    max_len = int(getattr(cfg, "clip_max_ms", 15000) / 1000.0 * fps)
+    if max_len > 0 and end - start > max_len:
+        start = max(0, end - max_len)
+    return start, end
+
+
 class Pipeline:
     def __init__(self, detector, cfg=None) -> None:
         self.detector = detector
@@ -239,10 +292,7 @@ class Pipeline:
         ok_snap = cv2.imwrite(str(base / snapshot_rel), annotated)
 
         # Evidence clip extracted from the source ------------------------
-        pre_frames = int(self.cfg.clip_before_ms / 1000.0 * fps)
-        post_frames = int(self.cfg.clip_after_ms / 1000.0 * fps)
-        start = max(0, src_frame - pre_frames)
-        end = src_frame + post_frames
+        start, end = compute_clip_window(event, src_frame, fps, self.cfg)
         clip_ok = self._write_clip(cap, start, end, str(base / clip_rel), fps, width, height)
         if not clip_ok:
             clip_rel = None
@@ -250,6 +300,9 @@ class Pipeline:
         return {
             "video_id": video_id,
             "timestamp_ms": event["timestamp_ms"],
+            # The littering moment the evidence clip is anchored on; the fire
+            # time above trails it by seconds.
+            "born_timestamp_ms": event["born_timestamp_ms"],
             "confidence": event["confidence"],
             "snapshot_path": snapshot_rel if ok_snap else None,
             "clip_path": clip_rel,
@@ -283,18 +336,7 @@ class Pipeline:
 
     # ------------------------------------------------------------------
     def _open_writer(self, out_path: str, fps, width, height):
-        for codec in CODECS:
-            try:
-                fourcc = cv2.VideoWriter_fourcc(*codec)
-            except Exception:
-                continue
-            writer = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
-            if writer.isOpened():
-                logger.debug("Using codec %s for %s", codec, out_path)
-                return writer
-            writer.release()
-        logger.warning("No usable video codec for %s (tried %s)", out_path, CODECS)
-        return None
+        return open_video_writer(out_path, fps, width, height)
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------

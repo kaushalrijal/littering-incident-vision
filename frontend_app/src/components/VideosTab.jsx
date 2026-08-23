@@ -223,6 +223,7 @@ export default function VideosTab({ liveStats, refreshKey }) {
               items.map((vid) => {
                 const stats = liveStats[vid.id] || {};
                 const isProcessing = vid.status === 'processing';
+                const isWebcam = vid.source_type === 'webcam';
                 const processedFrames =
                   stats.processed_frames ?? vid.processed_frames ?? 0;
                 const totalFrames = stats.total_frames ?? vid.total_frames ?? 0;
@@ -235,9 +236,18 @@ export default function VideosTab({ liveStats, refreshKey }) {
                   <tr key={vid.id} className="border-b border-border last:border-b-0 transition-colors hover:bg-sidebar">
                     <td className="max-w-xs px-5 py-4">
                       <p className="truncate text-sm font-bold">{vid.filename}</p>
-                      <p className="mt-1 font-mono text-[11px] text-muted-foreground">
-                        #{vid.id} · {(vid.duration_ms / 1000).toFixed(1)}s
-                        {vid.width > 0 && ` · ${vid.width}×${vid.height}`}
+                      <p className="mt-1 flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+                        #{vid.id}
+                        {isWebcam ? (
+                          <span className="inline-flex items-center gap-1 border border-destructive px-1.5 py-0.5 text-[9px] leading-none font-bold tracking-[0.08em] text-destructive uppercase">
+                            <span className="h-1 w-1 bg-destructive" /> Live
+                          </span>
+                        ) : (
+                          <>
+                            {` · ${(vid.duration_ms / 1000).toFixed(1)}s`}
+                            {vid.width > 0 && ` · ${vid.width}×${vid.height}`}
+                          </>
+                        )}
                       </p>
                     </td>
                     <td className="px-4 py-4">
@@ -283,7 +293,7 @@ export default function VideosTab({ liveStats, refreshKey }) {
                     </td>
                     <td className="px-5 py-4">
                       <div className="flex justify-end gap-2">
-                        {vid.status === 'completed' && (
+                        {!isWebcam && vid.status === 'completed' && (
                           <button
                             onClick={() => setSelectedVideo(vid)}
                             className="btn btn-outline gap-1.5 px-3 py-1.5"
@@ -291,13 +301,15 @@ export default function VideosTab({ liveStats, refreshKey }) {
                             <Eye className="h-3.5 w-3.5" /> Output
                           </button>
                         )}
-                        <button
-                          onClick={() => handleReprocess(vid.id)}
-                          disabled={isProcessing}
-                          className="btn btn-outline gap-1.5 px-3 py-1.5"
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" /> Re-run
-                        </button>
+                        {!isWebcam && (
+                          <button
+                            onClick={() => handleReprocess(vid.id)}
+                            disabled={isProcessing}
+                            className="btn btn-outline gap-1.5 px-3 py-1.5"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" /> Re-run
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

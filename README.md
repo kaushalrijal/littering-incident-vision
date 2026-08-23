@@ -111,8 +111,13 @@ python scripts/evaluate.py              # runs the pipeline over data/test_video
    - **Confirm** / **False alarm** review buttons.
 4. The **Real-Time Camera** tab runs the full pipeline live on your webcam over
    a WebSocket, showing the annotated stream, FPS, inference latency and the
-   active (trash, person) associations. Live webcam incidents are shown
-   on-screen only — they are not saved to the database.
+   active (trash, person) associations. Detected incidents get the full
+   evidence trail like uploaded videos: an in-memory ring buffer keeps recent
+   frames so each saved incident includes footage from **before** the littering
+   moment plus post-roll after it (annotated snapshot + evidence clip), and the
+   session appears as a "Live" entry in the Videos tab for review. A short
+   alarm chime and a toast notification fire on every detected incident, with a
+   red REC badge while evidence is being recorded.
 
 ### Useful demo videos (put them in `data/test_videos/`)
 
@@ -140,7 +145,8 @@ change them. The most useful ones:
 | `STATIONARY_FRAMES` | `8` | how long the object must stay still (rule **S**) |
 | `LEAVE_DISTANCE` | `100` | px — how far the person must move away (rule **M**) |
 | `IGNORE_FIRST_FRAMES` | `20` | waste already visible at the start = pre-existing litter, never an event |
-| `CLIP_BEFORE_MS` / `CLIP_AFTER_MS` | `2000` / `3000` | evidence clip window |
+| `CLIP_BEFORE_MS` / `CLIP_AFTER_MS` | `2000` / `3000` | evidence clip window (uploads **and** live camera) |
+| `WEBCAM_SAVE_EVIDENCE` | `true` | save live-camera incidents like uploads: snapshot + evidence clip + review rows |
 | `MAX_INCIDENTS` | `50` | cap per video |
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | server binding |
 
@@ -233,6 +239,7 @@ litter-detector/
 │           ├── worker.py            # background processing thread + WS broadcasts
 │           ├── pipeline.py          # video -> detect -> track -> events -> evidence
 │           ├── event_engine.py      # N ^ R ^ S ^ M rule engine (pure Python)
+│           ├── live_recorder.py     # webcam evidence: ring buffer -> snapshot/clip/incident rows
 │           └── websocket_manager.py # WebSocket connection registry + broadcast
 ├── ml/
 │   ├── detector.py               # YOLO + ByteTrack wrapper
@@ -252,7 +259,8 @@ litter-detector/
 │   ├── test_event_engine.py      # unit tests for the rule engine
 │   ├── test_evaluate.py          # unit tests for the evaluation harness
 │   ├── test_reconcile.py         # unit tests for startup crash-recovery
-│   └── test_webcam.py            # unit tests for the webcam frame processor
+│   ├── test_webcam.py            # unit tests for the webcam frame processor
+│   └── test_live_recorder.py     # unit tests for live evidence recording
 └── data/
     ├── test_videos/              # put demo/eval videos here
     ├── eval_results.json         # written by scripts/evaluate.py
